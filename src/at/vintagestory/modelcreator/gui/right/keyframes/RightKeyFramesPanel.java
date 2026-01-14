@@ -22,6 +22,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 	
 	private ElementKeyFrameOffsetPanel panelPosition;
 	private ElementKeyFrameRotationPanel panelRotation;
+	private KeyFrameToolsPanel panelTools;
 	JToggleButton btnPos;
 	JToggleButton btnRot;
 	JToggleButton btnStretch;
@@ -36,6 +37,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 	{
 		panelPosition = new ElementKeyFrameOffsetPanel(this);
 		panelRotation = new ElementKeyFrameRotationPanel(this);
+		panelTools = new KeyFrameToolsPanel();
 	}
 
 
@@ -142,6 +144,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		
 		add(btnContainer);
+		add(panelTools);
 		add(panelRotation);
 		add(panelPosition);
 		
@@ -224,6 +227,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		btnPos.setEnabled(enabled);
 		btnRot.setEnabled(enabled);
+		panelTools.updateValues(byGuiElem);
 		//btnStretch.setEnabled(enabled);		
 	}
 	
