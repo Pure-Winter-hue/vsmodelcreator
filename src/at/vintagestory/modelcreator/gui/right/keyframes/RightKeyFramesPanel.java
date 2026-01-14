@@ -144,9 +144,9 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		
 		add(btnContainer);
-		add(panelTools);
 		add(panelRotation);
 		add(panelPosition);
+		add(panelTools);
 		
 		updateValues(null);
 	}
