@@ -349,171 +349,322 @@ public class Project
 	}
 
 public void mirrorSelectedElementsX() {
-	// In Entity Texture Mode, the model is oriented such that "front" is along +/-X
-	// (see the grid label), so left/right symmetry runs along Z.
-	if (EntityTextureMode) {
-		mirrorSelectedElementsZ();
-		return;
-	}
-	if (tree == null) return;
-	java.util.List<Element> selected = tree.getSelectedElements();
-	if (selected == null || selected.size() == 0) return;
-
-	// Only mirror topmost selected elements (avoid double-mirroring children of already selected parents)
-	java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
-	java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
-	for (Element e : selected) {
-		boolean hasSelectedParent = false;
-		Element p = e.ParentElement;
-		while (p != null) {
-			if (selset.contains(p)) { hasSelectedParent = true; break; }
-			p = p.ParentElement;
-		}
-		if (!hasSelectedParent) top.add(e);
-	}
-
-	ModelCreator.ignoreDidModify++;
-	ModelCreator.changeHistory.beginMultichangeHistoryState();
-
-	java.util.ArrayList<Element> mirrored = new java.util.ArrayList<Element>();
-	for (Element e : top) {
-		Element newElem = new Element(e);
-		newElem.ParentElement = e.ParentElement;
-
-		// Parenting / root list handling (step-parented elements can appear in root list and also have a parent)
-		if (newElem.ParentElement != null) {
-			newElem.ParentElement.ChildElements.add(newElem);
-		}
-		if (newElem.ParentElement == null || (e.stepparentName != null && rootElements.contains(e))) {
-			rootElements.add(newElem);
-		}
-
-		newElem.setName(e.getName() + "_mirror");
-		EnsureUniqueElementName(newElem);
-
-		double parentAbsX = (e.ParentElement == null) ? 0 : getAbsoluteStartX(e.ParentElement);
-		newElem.mirrorX(16, parentAbsX, parentAbsX);
-
-		mirrored.add(newElem);
-
-		// Insert into tree
-		if (newElem.ParentElement == null) {
-			tree.addRootElement(newElem);
-		} else {
-				// ElementTree.addObject expects a tree node parent, not an Element.
-				javax.swing.tree.DefaultMutableTreeNode parentNode = tree.getNodeFor(newElem.ParentElement);
-				tree.addElement(parentNode, newElem, true);
-		}
-	}
-
-	ModelCreator.ignoreDidModify--;
-
-	// Select mirrored elements
-	try {
-		javax.swing.JTree jtree = tree.jtree;
-		javax.swing.tree.TreePath[] paths = new javax.swing.tree.TreePath[mirrored.size()];
-		for (int i = 0; i < mirrored.size(); i++) {
-			javax.swing.tree.DefaultMutableTreeNode node = tree.getNodeFor(mirrored.get(i));
-			paths[i] = node == null ? null : new javax.swing.tree.TreePath(node.getPath());
-		}
-		java.util.ArrayList<javax.swing.tree.TreePath> valid = new java.util.ArrayList<javax.swing.tree.TreePath>();
-		for (javax.swing.tree.TreePath p : paths) if (p != null) valid.add(p);
-		jtree.setSelectionPaths(valid.toArray(new javax.swing.tree.TreePath[0]));
-	} catch (Throwable t) {
-		// ignore selection issues
-	}
-
-	SelectedElement = tree.getSelectedElement();
-	SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
-	ModelCreator.DidModify();
-	ModelCreator.updateValues(null);
-	tree.jtree.updateUI();
-
-	ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
-	ModelCreator.reloadStepparentRelationShips();
+    mirrorSelectedElementsX(false);
 }
 
+public void mirrorSelectedElementsX(boolean mirrorAnimations) {
+    // In Entity Texture Mode, the model is oriented such that "front" is along +/-X
+    // (see the grid label), so left/right symmetry runs along Z.
+    if (EntityTextureMode) {
+        mirrorSelectedElementsZ(mirrorAnimations);
+        return;
+    }
+    mirrorSelectedElementsInternal(false, mirrorAnimations);
+}
 
-/**
- * Mirrors the selected elements across the Z center (left/right in Entity Texture Mode).
- */
 public void mirrorSelectedElementsZ() {
-	if (tree == null) return;
-	java.util.List<Element> selected = tree.getSelectedElements();
-	if (selected == null || selected.size() == 0) return;
-
-	// Only mirror topmost selected elements (avoid double-mirroring children of already selected parents)
-	java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
-	java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
-	for (Element e : selected) {
-		boolean hasSelectedParent = false;
-		Element p = e.ParentElement;
-		while (p != null) {
-			if (selset.contains(p)) { hasSelectedParent = true; break; }
-			p = p.ParentElement;
-		}
-		if (!hasSelectedParent) top.add(e);
-	}
-
-	ModelCreator.ignoreDidModify++;
-	ModelCreator.changeHistory.beginMultichangeHistoryState();
-
-	java.util.ArrayList<Element> mirrored = new java.util.ArrayList<Element>();
-	for (Element e : top) {
-		Element newElem = new Element(e);
-		newElem.ParentElement = e.ParentElement;
-
-		// Parenting / root list handling (step-parented elements can appear in root list and also have a parent)
-		if (newElem.ParentElement != null) {
-			newElem.ParentElement.ChildElements.add(newElem);
-		}
-		if (newElem.ParentElement == null || (e.stepparentName != null && rootElements.contains(e))) {
-			rootElements.add(newElem);
-		}
-
-		newElem.setName(e.getName() + "_mirror");
-		EnsureUniqueElementName(newElem);
-
-		double parentAbsZ = (e.ParentElement == null) ? 0 : getAbsoluteStartZ(e.ParentElement);
-		newElem.mirrorZ(16, parentAbsZ, parentAbsZ);
-
-		mirrored.add(newElem);
-
-		// Insert into tree
-		if (newElem.ParentElement == null) {
-			tree.addRootElement(newElem);
-		} else {
-			javax.swing.tree.DefaultMutableTreeNode parentNode = tree.getNodeFor(newElem.ParentElement);
-			tree.addElement(parentNode, newElem, true);
-		}
-	}
-
-	ModelCreator.ignoreDidModify--;
-
-	// Select mirrored elements
-	try {
-		javax.swing.JTree jtree = tree.jtree;
-		javax.swing.tree.TreePath[] paths = new javax.swing.tree.TreePath[mirrored.size()];
-		for (int i = 0; i < mirrored.size(); i++) {
-			javax.swing.tree.DefaultMutableTreeNode node = tree.getNodeFor(mirrored.get(i));
-			paths[i] = node == null ? null : new javax.swing.tree.TreePath(node.getPath());
-		}
-		java.util.ArrayList<javax.swing.tree.TreePath> valid = new java.util.ArrayList<javax.swing.tree.TreePath>();
-		for (javax.swing.tree.TreePath p : paths) if (p != null) valid.add(p);
-		jtree.setSelectionPaths(valid.toArray(new javax.swing.tree.TreePath[0]));
-	} catch (Throwable t) {
-		// ignore selection issues
-	}
-
-	SelectedElement = tree.getSelectedElement();
-	SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
-	ModelCreator.DidModify();
-	ModelCreator.updateValues(null);
-	tree.jtree.updateUI();
-
-	ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
-	ModelCreator.reloadStepparentRelationShips();
+    mirrorSelectedElementsZ(false);
 }
+
+public void mirrorSelectedElementsZ(boolean mirrorAnimations) {
+    mirrorSelectedElementsInternal(true, mirrorAnimations);
+}
+
+private void mirrorSelectedElementsInternal(boolean mirrorOnZ, boolean mirrorAnimations) {
+    if (tree == null) return;
+    java.util.List<Element> selected = tree.getSelectedElements();
+    if (selected == null || selected.size() == 0) return;
+
+    // Only mirror topmost selected elements (avoid double-mirroring children of already selected parents)
+    java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
+    java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
+    for (Element e : selected) {
+        boolean hasSelectedParent = false;
+        Element p = e.ParentElement;
+        while (p != null) {
+            if (selset.contains(p)) { hasSelectedParent = true; break; }
+            p = p.ParentElement;
+        }
+        if (!hasSelectedParent) top.add(e);
+    }
+
+    ModelCreator.ignoreDidModify++;
+    ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+    java.util.ArrayList<Element> mirroredTop = new java.util.ArrayList<Element>();
+    java.util.HashMap<Element, Element> mirrorMap = new java.util.HashMap<Element, Element>();
+
+    for (Element e : top) {
+        Element newElem = new Element(e);
+        newElem.ParentElement = e.ParentElement;
+
+        // Compute parent absolute translation (root space) for hierarchy-safe mirroring
+        double parentAbs = 0;
+        if (e.ParentElement != null) {
+            parentAbs = mirrorOnZ ? getAbsoluteStartZ(e.ParentElement) : getAbsoluteStartX(e.ParentElement);
+        }
+
+        // Mirror geometry + UVs
+        if (mirrorOnZ) {
+            newElem.mirrorZ(16, parentAbs, parentAbs);
+        } else {
+            newElem.mirrorX(16, parentAbs, parentAbs);
+        }
+
+        // Rename (L <-> R) based on which side the ORIGINAL element is on.
+        renameMirroredSubtree(e, newElem, mirrorOnZ);
+        ensureUniqueNameIfUsedRec(newElem);
+
+        // Root list handling (step-parented elements can appear in root list and also have a parent)
+        if (newElem.ParentElement == null || (e.stepparentName != null && rootElements.contains(e))) {
+            rootElements.add(newElem);
+        }
+
+        mirroredTop.add(newElem);
+        buildMirrorMapRec(e, newElem, mirrorMap);
+
+        // Insert into tree
+        if (newElem.ParentElement == null) {
+            tree.addRootElement(newElem);
+        } else {
+            javax.swing.tree.DefaultMutableTreeNode parentNode = tree.getNodeFor(newElem.ParentElement);
+            tree.addElement(parentNode, newElem, true);
+        }
+    }
+
+    // Optionally mirror animation keyframes
+    if (mirrorAnimations && mirrorMap.size() > 0) {
+        mirrorAnimationsForMap(mirrorMap, mirrorOnZ);
+        if (SelectedAnimation != null) {
+            SelectedAnimation.SetFramesDirty();
+        }
+    }
+
+    ModelCreator.ignoreDidModify--;
+
+    // Select mirrored top-level elements
+    try {
+        javax.swing.JTree jtree = tree.jtree;
+        javax.swing.tree.TreePath[] paths = new javax.swing.tree.TreePath[mirroredTop.size()];
+        for (int i = 0; i < mirroredTop.size(); i++) {
+            javax.swing.tree.DefaultMutableTreeNode node = tree.getNodeFor(mirroredTop.get(i));
+            paths[i] = node == null ? null : new javax.swing.tree.TreePath(node.getPath());
+        }
+        java.util.ArrayList<javax.swing.tree.TreePath> valid = new java.util.ArrayList<javax.swing.tree.TreePath>();
+        for (javax.swing.tree.TreePath p : paths) if (p != null) valid.add(p);
+        jtree.setSelectionPaths(valid.toArray(new javax.swing.tree.TreePath[0]));
+    } catch (Throwable t) {
+        // ignore selection issues
+    }
+
+    SelectedElement = tree.getSelectedElement();
+    SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+    ModelCreator.DidModify();
+    ModelCreator.updateValues(null);
+    tree.jtree.updateUI();
+
+    ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+    ModelCreator.reloadStepparentRelationShips();
+}
+
+
+	/**
+	 * Builds a mapping of original element -> mirrored element for the full subtree.
+	 * Assumes the mirrored element was created via the Element copy constructor, so child ordering matches.
+	 */
+	private void buildMirrorMapRec(Element orig, Element mirrored, java.util.Map<Element, Element> map)
+	{
+		if (orig == null || mirrored == null) return;
+		map.put(orig, mirrored);
+		int cnt = Math.min(orig.ChildElements.size(), mirrored.ChildElements.size());
+		for (int i = 0; i < cnt; i++) {
+			buildMirrorMapRec(orig.ChildElements.get(i), mirrored.ChildElements.get(i), map);
+		}
+	}
+
+	private double getAbsCenterFor(Element elem, boolean mirrorOnZ)
+	{
+		double abs = mirrorOnZ ? getAbsoluteStartZ(elem) : getAbsoluteStartX(elem);
+		double size = mirrorOnZ ? elem.getDepth() : elem.getWidth();
+		return abs + size / 2.0;
+	}
+
+	private char detectSideMarker(String name)
+	{
+		if (name == null) return 0;
+		if (name.startsWith("Right")) return 'R';
+		if (name.startsWith("Left")) return 'L';
+		if (name.length() >= 2) {
+			char c0 = name.charAt(0);
+			char c1 = name.charAt(1);
+			if ((c0 == 'R' || c0 == 'L') && Character.isUpperCase(c1)) return c0;
+		}
+		// Common delimiters: _R, -R, .R, spaceR
+		if (name.matches(".*(?:^|[_\\-\\.\\s])R(?:$|[_\\-\\.\\s].*)")) return 'R';
+		if (name.matches(".*(?:^|[_\\-\\.\\s])L(?:$|[_\\-\\.\\s].*)")) return 'L';
+		return 0;
+	}
+
+	/**
+	 * Swap left/right tokens in a name (RFemur <-> LFemur, RightArm <-> LeftArm, _R <-> _L, etc.)
+	 */
+	private String swapLeftRightInName(String name)
+	{
+		if (name == null) return null;
+		String s = name;
+		// Word swaps first
+		s = s.replace("Left", "__TMPLEFT__");
+		s = s.replace("Right", "__TMPRIGHT__");
+		// Prefix swaps (RThing/LThing)
+		s = s.replaceAll("^R(?=[A-Z])", "__TMPR__");
+		s = s.replaceAll("^L(?=[A-Z])", "__TMPL__");
+		// Delimited swaps (_RThing / _LThing / .RThing / -RThing / spaceRThing)
+		s = s.replaceAll("(^|[_\\-\\.\\s])R(?=[A-Z])", "$1__TMPR__");
+		s = s.replaceAll("(^|[_\\-\\.\\s])L(?=[A-Z])", "$1__TMPL__");
+		// Suffix swaps (_R / _L / .R / -R)
+		s = s.replaceAll("([_\\-\\.])R$", "$1__TMPR__");
+		s = s.replaceAll("([_\\-\\.])L$", "$1__TMPL__");
+
+		// Apply placeholders
+		s = s.replace("__TMPR__", "L");
+		s = s.replace("__TMPL__", "R");
+		s = s.replace("__TMPLEFT__", "Right");
+		s = s.replace("__TMPRIGHT__", "Left");
+		return s;
+	}
+
+	/**
+	 * Renames the mirrored subtree so left/right naming stays sane.
+	 *
+	 * - If the original name contains a clear side marker (L/R/Left/Right), we swap it.
+	 * - Otherwise, if the element is clearly off-center, we prefix the mirrored element with the opposite side.
+	 * - Centered elements just get "_mirror".
+	 */
+	private void renameMirroredSubtree(Element orig, Element mirrored, boolean mirrorOnZ)
+	{
+		if (orig == null || mirrored == null) return;
+		double c = getAbsCenterFor(orig, mirrorOnZ);
+		double dist = Math.abs(c - 8.0);
+		boolean centered = dist < 0.0001;
+		char marker = detectSideMarker(orig.getName());
+		boolean origRight = marker == 'R' ? true : marker == 'L' ? false : c > 8.0;
+		char mirroredSide = origRight ? 'L' : 'R';
+
+		String newName;
+		if (centered) {
+			newName = orig.getName() + "_mirror";
+		} else {
+			String swapped = swapLeftRightInName(orig.getName());
+			if (swapped != null && !swapped.equals(orig.getName())) {
+				newName = swapped;
+			} else {
+				// No detectable marker, add one based on mirrored side
+				newName = mirroredSide + orig.getName();
+			}
+		}
+
+		mirrored.setName(newName);
+
+		int cnt = Math.min(orig.ChildElements.size(), mirrored.ChildElements.size());
+		for (int i = 0; i < cnt; i++) {
+			renameMirroredSubtree(orig.ChildElements.get(i), mirrored.ChildElements.get(i), mirrorOnZ);
+		}
+	}
+
+	private String makeUniqueNameIfUsed(String desired)
+	{
+		if (desired == null) return null;
+		if (!IsElementNameUsed(desired, null)) return desired;
+
+		String base = desired;
+		int num = 2;
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(.*?)(\\d+)$").matcher(desired);
+		if (m.matches()) {
+			base = m.group(1);
+			try {
+				num = Integer.parseInt(m.group(2)) + 1;
+			} catch (Exception ex) {
+				num = 2;
+			}
+		}
+
+		String cand = base + num;
+		while (IsElementNameUsed(cand, null)) {
+			num++;
+			cand = base + num;
+		}
+		return cand;
+	}
+
+	private void ensureUniqueNameIfUsedRec(Element elem)
+	{
+		if (elem == null) return;
+		elem.setName(makeUniqueNameIfUsed(elem.getName()));
+		for (Element child : elem.ChildElements) {
+			ensureUniqueNameIfUsedRec(child);
+		}
+	}
+
+	/** Mirrors animation keyframe data for all mapped elements (orig -> mirrored). */
+	private void mirrorAnimationsForMap(java.util.Map<Element, Element> mirrorMap, boolean mirrorOnZ)
+	{
+		if (mirrorMap == null || mirrorMap.size() == 0) return;
+
+		for (Animation anim : Animations) {
+			boolean changed = false;
+			for (AnimationFrame kf : anim.keyframes) {
+				int frameNo = kf.getFrameNumber();
+				for (java.util.Map.Entry<Element, Element> ent : mirrorMap.entrySet()) {
+					Element orig = ent.getKey();
+					Element mir = ent.getValue();
+					AnimFrameElement oldK = kf.GetKeyFrameElementFlat(orig);
+					if (oldK == null) continue;
+
+					AnimFrameElement newK = kf.GetOrCreateKeyFrameElementFlat(frameNo, mir);
+					newK.setFrom(oldK);
+					newK.AnimatedElement = mir;
+					// Project is outside the model package; use the public accessor.
+					newK.AnimatedElementName = mir.getName();
+
+					// Reflect offsets/origins and rotations
+					if (!mirrorOnZ) {
+						// Mirror across X: X flips, pitch stays, yaw/roll invert
+						if (newK.PositionSet) {
+							newK.setOffsetX(-oldK.getOffsetX());
+							newK.setOffsetY(oldK.getOffsetY());
+							newK.setOffsetZ(oldK.getOffsetZ());
+							newK.setOriginX(-oldK.getOriginX());
+							newK.setOriginY(oldK.getOriginY());
+							newK.setOriginZ(oldK.getOriginZ());
+						}
+						if (newK.RotationSet) {
+							newK.setRotationX(oldK.getRotationX());
+							newK.setRotationY(-oldK.getRotationY());
+							newK.setRotationZ(-oldK.getRotationZ());
+						}
+					} else {
+						// Mirror across Z: Z flips, roll stays, pitch/yaw invert
+						if (newK.PositionSet) {
+							newK.setOffsetX(oldK.getOffsetX());
+							newK.setOffsetY(oldK.getOffsetY());
+							newK.setOffsetZ(-oldK.getOffsetZ());
+							newK.setOriginX(oldK.getOriginX());
+							newK.setOriginY(oldK.getOriginY());
+							newK.setOriginZ(-oldK.getOriginZ());
+						}
+						if (newK.RotationSet) {
+							newK.setRotationX(-oldK.getRotationX());
+							newK.setRotationY(-oldK.getRotationY());
+							newK.setRotationZ(oldK.getRotationZ());
+						}
+					}
+
+					changed = true;
+				}
+			}
+			if (changed) anim.SetFramesDirty();
+		}
+	}
 
 	
 
