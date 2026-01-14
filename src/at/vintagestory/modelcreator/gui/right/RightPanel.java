@@ -182,9 +182,13 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 		return ModelCreator.currentProject.SelectedElement;
 	}
 
+	
+	public java.util.List<Element> getSelectedElements()
+	{
+		return tree.getSelectedElements();
+	}
 
-
-	public ModelCreator getCreator()
+public ModelCreator getCreator()
 	{
 		return creator;
 	}

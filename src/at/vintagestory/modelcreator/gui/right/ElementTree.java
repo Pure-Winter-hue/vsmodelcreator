@@ -1,6 +1,7 @@
 package at.vintagestory.modelcreator.gui.right;
 
 import java.awt.*;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
@@ -61,7 +62,7 @@ public class ElementTree
 		treeModel = new DefaultTreeModel(rootNode);
         jtree = new FixedJTree(treeModel);
         jtree.setEditable(false);
-        jtree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+        jtree.getSelectionModel().setSelectionMode(TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION);
         jtree.setShowsRootHandles(true);
         jtree.setFocusable(true);
         jtree.setCellRenderer(new ElementTreeCellRenderer());
@@ -76,11 +77,12 @@ public class ElementTree
 				
 				if (!ModelCreator.ignoreValueUpdates) {
 					ModelCreator.currentProject.SelectedElement = getSelectedElement();
+					ModelCreator.currentProject.SelectedElements = new java.util.ArrayList<Element>(getSelectedElements());
 					if (ModelCreator.currentProject.SelectedElement != null) {
 						ModelCreator.currentProject.SelectedElement.elementWasSelected();
 					}
-					ModelCreator.updateValues(jtree);	
-				}
+					ModelCreator.updateValues(jtree);
+					}
 			}	
 		});
 		
@@ -165,19 +167,38 @@ public class ElementTree
 			{
 				TreePath path = jtree.getPathForLocation(arg0.getX(), arg0.getY());
 				TreePath pathLeft = jtree.getPathForLocation(arg0.getX() - 17, arg0.getY());
-				
-				if (path != null && pathLeft == null) {
-					
-					Object userObj = ((DefaultMutableTreeNode)path.getLastPathComponent()).getUserObject(); 
-		        	if (userObj instanceof Element) {
-		        		((Element)userObj).setRenderInEditor(!((Element)userObj).getRenderInEditor());
-		        		jtree.updateUI();
-		        		arg0.consume();
-		        	}
+
+				// Shift-click toggles selection (multi select)
+				if (path != null && pathLeft != null && (arg0.getModifiersEx() & InputEvent.SHIFT_DOWN_MASK) != 0) {
+					if (jtree.isPathSelected(path)) {
+						jtree.removeSelectionPath(path);
+						// If we removed the lead selection, move the lead to another selected path (if any)
+						TreePath lead = jtree.getLeadSelectionPath();
+						if (lead != null && lead.equals(path)) {
+							TreePath[] remaining = jtree.getSelectionPaths();
+							if (remaining != null && remaining.length > 0) {
+								jtree.setLeadSelectionPath(remaining[remaining.length - 1]);
+							}
+						}
+					} else {
+						jtree.addSelectionPath(path);
+						jtree.setLeadSelectionPath(path);
+					}
+					arg0.consume();
+					return;
 				}
-				
+
+				// Click on the visibility icon (left of the row) toggles renderInEditor
+				if (path != null && pathLeft == null) {
+					Object userObj = ((DefaultMutableTreeNode)path.getLastPathComponent()).getUserObject();
+					if (userObj instanceof Element) {
+						((Element)userObj).setRenderInEditor(!((Element)userObj).getRenderInEditor());
+						jtree.updateUI();
+						arg0.consume();
+					}
+				}
 			}
-			
+
 			@Override
 			public void mouseExited(MouseEvent arg0)
 			{
@@ -216,7 +237,8 @@ public class ElementTree
 
 	
 	public Element getSelectedElement() {
-		TreePath currentSelection = jtree.getSelectionPath();
+		TreePath currentSelection = jtree.getLeadSelectionPath();
+		if (currentSelection == null) currentSelection = jtree.getSelectionPath();
         if (currentSelection != null) {
         	Object userObj = ((DefaultMutableTreeNode)currentSelection.getLastPathComponent()).getUserObject(); 
         	if (userObj instanceof Element) {
@@ -225,9 +247,24 @@ public class ElementTree
         }
         return null;
 	}
+
+	public java.util.List<Element> getSelectedElements()
+	{
+		java.util.ArrayList<Element> elems = new java.util.ArrayList<Element>();
+		TreePath[] paths = jtree.getSelectionPaths();
+		if (paths == null) return elems;
+		for (TreePath p : paths) {
+			DefaultMutableTreeNode node = (DefaultMutableTreeNode)p.getLastPathComponent();
+			Object obj = node.getUserObject();
+			if (obj instanceof Element) elems.add((Element)obj);
+		}
+		return elems;
+	}
+
 	
 	public Element getNextSelectedElement() {
-		TreePath currentSelection = jtree.getSelectionPath();
+		TreePath currentSelection = jtree.getLeadSelectionPath();
+		if (currentSelection == null) currentSelection = jtree.getSelectionPath();
 		if (currentSelection != null) {
         	DefaultMutableTreeNode node = ((DefaultMutableTreeNode)currentSelection.getLastPathComponent());
         	if (node.getNextSibling() != null) { 
@@ -280,7 +317,8 @@ public class ElementTree
 	
     /** Remove the currently selected node. */
     public boolean removeCurrentElement() {
-        TreePath currentSelection = jtree.getSelectionPath();
+        TreePath currentSelection = jtree.getLeadSelectionPath();
+		if (currentSelection == null) currentSelection = jtree.getSelectionPath();
         if (currentSelection != null) {
             DefaultMutableTreeNode currentNode = (DefaultMutableTreeNode)(currentSelection.getLastPathComponent());
             
@@ -447,4 +485,34 @@ public class ElementTree
 	}
 
 
+
+
+public DefaultMutableTreeNode getNodeFor(Element element) {
+	DefaultMutableTreeNode root = (DefaultMutableTreeNode)treeModel.getRoot();
+	java.util.Enumeration<?> e = root.breadthFirstEnumeration();
+	while (e.hasMoreElements()) {
+		DefaultMutableTreeNode node = (DefaultMutableTreeNode)e.nextElement();
+		if (node.getUserObject() == element) return node;
+	}
+	return null;
+}
+
+public boolean removeElement(Element element) {
+	DefaultMutableTreeNode node = getNodeFor(element);
+	if (node == null) return false;
+
+	DefaultMutableTreeNode parentNode = (DefaultMutableTreeNode) node.getParent();
+	if (parentNode == null) return false;
+
+	Object parentObj = parentNode.getUserObject();
+	if (parentObj instanceof Element) {
+		Element parentElem = (Element)parentObj;
+		parentElem.ChildElements.remove(element);
+		parentElem.StepChildElements.remove(element);
+		if (element.ParentElement == parentElem) element.ParentElement = null;
+	}
+
+	treeModel.removeNodeFromParent(node);
+	return true;
+}
 }

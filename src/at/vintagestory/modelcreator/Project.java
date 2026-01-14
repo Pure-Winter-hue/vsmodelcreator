@@ -41,6 +41,7 @@ public class Project
 	// Non-persistent project data
 	public AttachmentPoint SelectedAttachmentPoint;
 	public Element SelectedElement;
+	public ArrayList<Element> SelectedElements = new ArrayList<Element>();
 	public Animation SelectedAnimation;
 	public boolean PlayAnimation = false;
 	public ElementTree tree;
@@ -318,41 +319,256 @@ public class Project
 		ModelCreator.reloadStepparentRelationShips();
 	}
 	
+
+	/**
+	 * Computes the absolute X start translation of an element in root space,
+	 * by summing startX along the parent chain (ignores rotations).
+	 */
+	private double getAbsoluteStartX(at.vintagestory.modelcreator.model.Element elem)
+	{
+		double x = 0;
+		while (elem != null) {
+			x += elem.getStartX();
+			elem = elem.ParentElement;
+		}
+		return x;
+	}
+
+	/**
+	 * Computes the absolute Z start translation of an element in root space,
+	 * by summing startZ along the parent chain (ignores rotations).
+	 */
+	private double getAbsoluteStartZ(at.vintagestory.modelcreator.model.Element elem)
+	{
+		double z = 0;
+		while (elem != null) {
+			z += elem.getStartZ();
+			elem = elem.ParentElement;
+		}
+		return z;
+	}
+
+public void mirrorSelectedElementsX() {
+	// In Entity Texture Mode, the model is oriented such that "front" is along +/-X
+	// (see the grid label), so left/right symmetry runs along Z.
+	if (EntityTextureMode) {
+		mirrorSelectedElementsZ();
+		return;
+	}
+	if (tree == null) return;
+	java.util.List<Element> selected = tree.getSelectedElements();
+	if (selected == null || selected.size() == 0) return;
+
+	// Only mirror topmost selected elements (avoid double-mirroring children of already selected parents)
+	java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
+	java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
+	for (Element e : selected) {
+		boolean hasSelectedParent = false;
+		Element p = e.ParentElement;
+		while (p != null) {
+			if (selset.contains(p)) { hasSelectedParent = true; break; }
+			p = p.ParentElement;
+		}
+		if (!hasSelectedParent) top.add(e);
+	}
+
+	ModelCreator.ignoreDidModify++;
+	ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+	java.util.ArrayList<Element> mirrored = new java.util.ArrayList<Element>();
+	for (Element e : top) {
+		Element newElem = new Element(e);
+		newElem.ParentElement = e.ParentElement;
+
+		// Parenting / root list handling (step-parented elements can appear in root list and also have a parent)
+		if (newElem.ParentElement != null) {
+			newElem.ParentElement.ChildElements.add(newElem);
+		}
+		if (newElem.ParentElement == null || (e.stepparentName != null && rootElements.contains(e))) {
+			rootElements.add(newElem);
+		}
+
+		newElem.setName(e.getName() + "_mirror");
+		EnsureUniqueElementName(newElem);
+
+		double parentAbsX = (e.ParentElement == null) ? 0 : getAbsoluteStartX(e.ParentElement);
+		newElem.mirrorX(16, parentAbsX, parentAbsX);
+
+		mirrored.add(newElem);
+
+		// Insert into tree
+		if (newElem.ParentElement == null) {
+			tree.addRootElement(newElem);
+		} else {
+				// ElementTree.addObject expects a tree node parent, not an Element.
+				javax.swing.tree.DefaultMutableTreeNode parentNode = tree.getNodeFor(newElem.ParentElement);
+				tree.addElement(parentNode, newElem, true);
+		}
+	}
+
+	ModelCreator.ignoreDidModify--;
+
+	// Select mirrored elements
+	try {
+		javax.swing.JTree jtree = tree.jtree;
+		javax.swing.tree.TreePath[] paths = new javax.swing.tree.TreePath[mirrored.size()];
+		for (int i = 0; i < mirrored.size(); i++) {
+			javax.swing.tree.DefaultMutableTreeNode node = tree.getNodeFor(mirrored.get(i));
+			paths[i] = node == null ? null : new javax.swing.tree.TreePath(node.getPath());
+		}
+		java.util.ArrayList<javax.swing.tree.TreePath> valid = new java.util.ArrayList<javax.swing.tree.TreePath>();
+		for (javax.swing.tree.TreePath p : paths) if (p != null) valid.add(p);
+		jtree.setSelectionPaths(valid.toArray(new javax.swing.tree.TreePath[0]));
+	} catch (Throwable t) {
+		// ignore selection issues
+	}
+
+	SelectedElement = tree.getSelectedElement();
+	SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+	ModelCreator.DidModify();
+	ModelCreator.updateValues(null);
+	tree.jtree.updateUI();
+
+	ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+	ModelCreator.reloadStepparentRelationShips();
+}
+
+
+/**
+ * Mirrors the selected elements across the Z center (left/right in Entity Texture Mode).
+ */
+public void mirrorSelectedElementsZ() {
+	if (tree == null) return;
+	java.util.List<Element> selected = tree.getSelectedElements();
+	if (selected == null || selected.size() == 0) return;
+
+	// Only mirror topmost selected elements (avoid double-mirroring children of already selected parents)
+	java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
+	java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
+	for (Element e : selected) {
+		boolean hasSelectedParent = false;
+		Element p = e.ParentElement;
+		while (p != null) {
+			if (selset.contains(p)) { hasSelectedParent = true; break; }
+			p = p.ParentElement;
+		}
+		if (!hasSelectedParent) top.add(e);
+	}
+
+	ModelCreator.ignoreDidModify++;
+	ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+	java.util.ArrayList<Element> mirrored = new java.util.ArrayList<Element>();
+	for (Element e : top) {
+		Element newElem = new Element(e);
+		newElem.ParentElement = e.ParentElement;
+
+		// Parenting / root list handling (step-parented elements can appear in root list and also have a parent)
+		if (newElem.ParentElement != null) {
+			newElem.ParentElement.ChildElements.add(newElem);
+		}
+		if (newElem.ParentElement == null || (e.stepparentName != null && rootElements.contains(e))) {
+			rootElements.add(newElem);
+		}
+
+		newElem.setName(e.getName() + "_mirror");
+		EnsureUniqueElementName(newElem);
+
+		double parentAbsZ = (e.ParentElement == null) ? 0 : getAbsoluteStartZ(e.ParentElement);
+		newElem.mirrorZ(16, parentAbsZ, parentAbsZ);
+
+		mirrored.add(newElem);
+
+		// Insert into tree
+		if (newElem.ParentElement == null) {
+			tree.addRootElement(newElem);
+		} else {
+			javax.swing.tree.DefaultMutableTreeNode parentNode = tree.getNodeFor(newElem.ParentElement);
+			tree.addElement(parentNode, newElem, true);
+		}
+	}
+
+	ModelCreator.ignoreDidModify--;
+
+	// Select mirrored elements
+	try {
+		javax.swing.JTree jtree = tree.jtree;
+		javax.swing.tree.TreePath[] paths = new javax.swing.tree.TreePath[mirrored.size()];
+		for (int i = 0; i < mirrored.size(); i++) {
+			javax.swing.tree.DefaultMutableTreeNode node = tree.getNodeFor(mirrored.get(i));
+			paths[i] = node == null ? null : new javax.swing.tree.TreePath(node.getPath());
+		}
+		java.util.ArrayList<javax.swing.tree.TreePath> valid = new java.util.ArrayList<javax.swing.tree.TreePath>();
+		for (javax.swing.tree.TreePath p : paths) if (p != null) valid.add(p);
+		jtree.setSelectionPaths(valid.toArray(new javax.swing.tree.TreePath[0]));
+	} catch (Throwable t) {
+		// ignore selection issues
+	}
+
+	SelectedElement = tree.getSelectedElement();
+	SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+	ModelCreator.DidModify();
+	ModelCreator.updateValues(null);
+	tree.jtree.updateUI();
+
+	ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+	ModelCreator.reloadStepparentRelationShips();
+}
+
 	
-	public void removeCurrentElement() {
-		ModelCreator.ignoreDidModify++;
-		
-		Element curElem = SelectedElement;
-		Element nextElem = tree.getNextSelectedElement();
-		
-		tree.removeCurrentElement();
-		
+
+public void removeCurrentElement() {
+	ModelCreator.ignoreDidModify++;
+
+	java.util.List<Element> selected = tree == null ? null : tree.getSelectedElements();
+	if (selected == null || selected.size() == 0) { ModelCreator.ignoreDidModify--; return; }
+
+	// If multiple are selected, remove topmost selected elements
+	java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
+	java.util.ArrayList<Element> top = new java.util.ArrayList<Element>();
+	for (Element e : selected) {
+		boolean hasSelectedParent = false;
+		Element p = e.ParentElement;
+		while (p != null) {
+			if (selset.contains(p)) { hasSelectedParent = true; break; }
+			p = p.ParentElement;
+		}
+		if (!hasSelectedParent) top.add(e);
+	}
+
+	Element nextElem = tree.getNextSelectedElement();
+
+	for (Element curElem : top) {
+		tree.removeElement(curElem);
+
 		if (curElem.ParentElement == null) {
 			rootElements.remove(curElem);
 		}
-		
+
 		for (int i = 0; i < Animations.size(); i++) {
 			Animations.get(i).RemoveKeyFrameElement(curElem);
-			
 			if (Animations.get(i) == SelectedAnimation) {
-				Animations.get(i).SetFramesDirty();	
+				Animations.get(i).SetFramesDirty();
 			}
 		}
-		
+
 		curElem.onRemoved();
-		
-		ModelCreator.ignoreDidModify--;
-		
-		if (nextElem != null) {
-			tree.selectElement(nextElem);
-		}
-		
-		SelectedElement = tree.getSelectedElement();
-		ModelCreator.DidModify();
-		ModelCreator.updateValues(null);
-		
-		ModelCreator.reloadStepparentRelationShips();
 	}
+
+	ModelCreator.ignoreDidModify--;
+
+	if (nextElem != null) {
+		tree.selectElement(nextElem);
+	}
+
+	SelectedElement = tree.getSelectedElement();
+	SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+	ModelCreator.DidModify();
+	ModelCreator.updateValues(null);
+
+	ModelCreator.reloadStepparentRelationShips();
+}
+
 	
 
 	public void clear()

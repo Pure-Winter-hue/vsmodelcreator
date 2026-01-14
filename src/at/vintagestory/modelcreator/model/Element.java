@@ -1710,6 +1710,142 @@ public class Element implements IDrawable
 	
 	
 	
+
+
+/**
+ * Mirrors this element (and its children) across the global X mirror plane
+ * at modelWidth/2.
+ *
+ * This method supports element hierarchies: it mirrors each element in absolute (root) space
+ * and then converts the result back into the mirrored parent's local space, preventing children
+ * from "exploding" outward when mirroring parented models.
+ */
+public void mirrorX(double modelWidth)
+{
+	mirrorX(modelWidth, 0, 0);
+}
+
+public void mirrorX(double modelWidth, double origParentAbsX, double newParentAbsX)
+{
+	// Snapshot original values before mutation (needed for correct child mirroring)
+	double origLocalStartX = getStartX();
+	double origLocalOriginX = getOriginX();
+	double origWidth = getWidth();
+	double origRotY = getRotationY();
+	double origRotZ = getRotationZ();
+
+	// Absolute "from" position in root space
+	double origAbsFromX = origParentAbsX + origLocalStartX;
+
+	// Mirror bounds in root space, then convert back into the mirrored parent's space
+	double newAbsFromX = modelWidth - (origAbsFromX + origWidth);
+	setStartX(newAbsFromX - newParentAbsX);
+
+	// Origin is stored in parent space (rotation pivot is applied before the start translation)
+	double origAbsOriginX = origParentAbsX + origLocalOriginX;
+	double newAbsOriginX = modelWidth - origAbsOriginX;
+	setOriginX(newAbsOriginX - newParentAbsX);
+
+	// Mirror rotations (reflection in X)
+	setRotationY(-origRotY);
+	setRotationZ(-origRotZ);
+
+	// In entity texture mode, auto-unwrapping would overwrite manual UV changes.
+	// Disable auto unwrap for the mirrored element so UV mirroring can persist.
+	if (ModelCreator.currentProject != null && ModelCreator.currentProject.EntityTextureMode && isAutoUnwrapEnabled()) {
+		setAutoUnwrap(false);
+	}
+
+	// Mirror UVs by swapping U coordinates. Disable auto-uv per face so it won't get recalculated.
+	for (int i = 0; i < faces.length; i++) {
+		Face f = faces[i];
+		if (f.isAutoUVEnabled()) f.setAutoUVEnabled(false);
+		double su = f.getStartU();
+		double eu = f.getEndU();
+		f.setStartU(eu);
+		f.setEndU(su);
+	}
+
+	// Swap east/west face definitions
+	Face east = faces[1];
+	Face west = faces[3];
+	faces[1] = west.cloneFor(this, 1);
+	faces[3] = east.cloneFor(this, 3);
+
+	if (selectedFace == 1) selectedFace = 3;
+	else if (selectedFace == 3) selectedFace = 1;
+
+	// Recurse: child's parent space is after THIS element's start translation
+	double origChildParentAbsX = origAbsFromX;
+	double newChildParentAbsX = newAbsFromX;
+
+	for (int i = 0; i < ChildElements.size(); i++) {
+		ChildElements.get(i).mirrorX(modelWidth, origChildParentAbsX, newChildParentAbsX);
+	}
+}
+
+public void mirrorZ(double modelWidth)
+{
+	mirrorZ(modelWidth, 0, 0);
+}
+
+public void mirrorZ(double modelWidth, double origParentAbsZ, double newParentAbsZ)
+{
+	// Snapshot original values before mutation (needed for correct child mirroring)
+	double origLocalStartZ = getStartZ();
+	double origLocalOriginZ = getOriginZ();
+	double origDepth = getDepth();
+	double origRotX = getRotationX();
+	double origRotY = getRotationY();
+
+	// Absolute "from" position in root space
+	double origAbsFromZ = origParentAbsZ + origLocalStartZ;
+
+	// Mirror bounds in root space, then convert back into the mirrored parent's space
+	double newAbsFromZ = modelWidth - (origAbsFromZ + origDepth);
+	setStartZ(newAbsFromZ - newParentAbsZ);
+
+	// Origin is stored in parent space
+	double origAbsOriginZ = origParentAbsZ + origLocalOriginZ;
+	double newAbsOriginZ = modelWidth - origAbsOriginZ;
+	setOriginZ(newAbsOriginZ - newParentAbsZ);
+
+	// Mirror rotations (reflection in Z)
+	setRotationX(-origRotX);
+	setRotationY(-origRotY);
+
+	// Preserve manual UV mirroring in entity texture mode
+	if (ModelCreator.currentProject != null && ModelCreator.currentProject.EntityTextureMode && isAutoUnwrapEnabled()) {
+		setAutoUnwrap(false);
+	}
+
+	// Mirror UVs by swapping U coordinates. Disable auto-uv per face so it won't get recalculated.
+	for (int i = 0; i < faces.length; i++) {
+		Face f = faces[i];
+		if (f.isAutoUVEnabled()) f.setAutoUVEnabled(false);
+		double su = f.getStartU();
+		double eu = f.getEndU();
+		f.setStartU(eu);
+		f.setEndU(su);
+	}
+
+	// Swap north/south face definitions (Z axis)
+	Face north = faces[0];
+	Face south = faces[2];
+	faces[0] = south.cloneFor(this, 0);
+	faces[2] = north.cloneFor(this, 2);
+
+	if (selectedFace == 0) selectedFace = 2;
+	else if (selectedFace == 2) selectedFace = 0;
+
+	// Recurse: child's parent space is after THIS element's start translation
+	double origChildParentAbsZ = origAbsFromZ;
+	double newChildParentAbsZ = newAbsFromZ;
+
+	for (int i = 0; i < ChildElements.size(); i++) {
+		ChildElements.get(i).mirrorZ(modelWidth, origChildParentAbsZ, newChildParentAbsZ);
+	}
+}
 	public void reduceDecimals()
 	{
 		startX = ((int)Math.round(startX * 10)) / 10.0; 

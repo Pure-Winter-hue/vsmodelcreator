@@ -18,6 +18,7 @@ public class ElementPanel extends JPanel implements IValueUpdater
 	private ElementRotationOriginPanel panelOrigin;
 	private ElementRotationPanel panelRotation;
 	private ElementPropertiesPanel panelElementProperties;
+	private ElementMirrorPanel panelMirror;
 	
 
 	public ElementPanel(IElementManager manager)
@@ -34,6 +35,7 @@ public class ElementPanel extends JPanel implements IValueUpdater
 		panelOrigin = new ElementRotationOriginPanel(manager);
 		panelRotation = new ElementRotationPanel(manager);
 		panelElementProperties = new ElementPropertiesPanel(manager);
+		panelMirror = new ElementMirrorPanel(manager);
 	}
 
 	public void addComponents()
@@ -44,6 +46,7 @@ public class ElementPanel extends JPanel implements IValueUpdater
 		add(panelOrigin);
 		add(panelRotation);
 		add(panelElementProperties);
+		add(panelMirror);
 	}
 
 	@Override
@@ -54,5 +57,6 @@ public class ElementPanel extends JPanel implements IValueUpdater
 		panelElementProperties.updateValues(byGuiElem);
 		panelOrigin.updateValues(byGuiElem);
 		panelRotation.updateValues(byGuiElem);
+		panelMirror.updateValues(byGuiElem);
 	}
 }

@@ -719,8 +719,17 @@ public class Face
 		cloned.WindData = WindData == null ? null : WindData.clone();
 		cloned.WindModes = WindModes == null ? null : WindModes.clone();
 		cloned.Frostable = Frostable;
+		cloned.reflectiveMode = reflectiveMode;
+		cloned.ProjectType = ProjectType;
 		return cloned;
 	}
+
+public Face cloneFor(Element forElement, int sideOverride) {
+	Face cloned = clone(forElement);
+	cloned.side = sideOverride;
+	return cloned;
+}
+
 	
 	public double uvWidth() {
 		if (!snapUV) return Math.abs(textureUEnd - textureU);
