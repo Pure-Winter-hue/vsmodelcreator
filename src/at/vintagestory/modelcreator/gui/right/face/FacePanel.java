@@ -34,6 +34,7 @@ public class FacePanel extends JPanel implements IValueUpdater
 	private JSlider rotation;
 	private FaceTexturePanel panelTexture;
 	private FacePropertiesPanel panelFaceExtras;
+	private FaceToolsPanel panelTools;
 
 	private final int ROTATION_MIN = 0;
 	private final int ROTATION_MAX = 3;
@@ -97,6 +98,7 @@ public class FacePanel extends JPanel implements IValueUpdater
 		panelTexture = new FaceTexturePanel(manager);
 		panelFaceUV = new FaceUVPanel(manager);
 		panelFaceExtras = new FacePropertiesPanel(manager);
+		panelTools = new FaceToolsPanel(manager);
 
 		Hashtable<Integer, JLabel> labelTable = new Hashtable<Integer, JLabel>();
 		labelTable.put(new Integer(0), new JLabel("0\u00b0"));
@@ -137,6 +139,7 @@ public class FacePanel extends JPanel implements IValueUpdater
 		add(panelFaceUV);
 		add(sliderPanel);
 		add(panelFaceExtras);
+		add(panelTools);
 	}
 
 	@Override
@@ -156,6 +159,7 @@ public class FacePanel extends JPanel implements IValueUpdater
 		}
 		panelFaceUV.updateValues(byGuiElem);
 		panelFaceExtras.updateValues(byGuiElem);
+		panelTools.updateValues(byGuiElem);
 		panelElemUV.updateValues(byGuiElem);
 		panelElemUV.setVisible(ModelCreator.currentProject.EntityTextureMode);
 		
