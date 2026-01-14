@@ -1,23 +1,6 @@
-<img src="/BunnyRunning.gif" alt="Drawing" width="350"/>
+This is a version of VSMC with changes divergent of the main branch, that may or may not ever make it to the main VSMC. While I use my main branch for bug fixes for the main VSMC, I use this branch to add new features! :)
 
-This is the official tool for creating and animating blocks, items and entities for [Vintage Story](http://www.vintagestory.at/). It is based on on [MrCrayfish's Model Creator for Minecraft](https://github.com/MrCrayfish/ModelCreator) but extends upon it with many more features and saves the models in a format the vintage story engine can read.
-
-Current featureset:
-- Create/Remove/Modify/Arrange single cubes to build shapes
-- Texture Mapping Mode, automatic texture reload
-- Undo/Redo capability
-- Keyframe editor to create animations
-- Attachment point editor
-- Auto UV Unwrap for individual boxes with several unwrap modes
-- Export screenshots and animated gifs
-
-<hr>
-
-First launch guide for developers:
-- Setup Eclipse and open it
-- Import VSMC via File -> Import -> Git
-- Click on project name and open Build Path -> Configure Build Path
-  - Check Java library is Java 8
-  - Add JARs from libs folder and natives/\<os\>/swt.jar
-- Mark assets folder as source folder (Build Path -> Use as Source folder)
-- Click on project name and Run As -> Java Application
+This version of VSMC has these additions:
+-Multiselect (click an element in the hierchy then hold shift, and click more of them.) <- precursor to mutli part editting without needing to parent.
+-Mirror Button (mirrors whatever is multi selected, or everything under the thing you have selected i.e. the top parent and all its children.) Neatly stacks UV's.
+-UV Flip buttons for left right/up.
