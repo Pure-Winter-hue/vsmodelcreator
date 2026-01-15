@@ -3,6 +3,7 @@ package at.vintagestory.modelcreator.gui.left;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Toolkit;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.KeyAdapter;
@@ -61,6 +62,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 	JLabel mountAnimLabel;
 	
 	JTextField durationTextField;
+	JTextField moveToFrameTextField;
 	JSlider frameSlider;
 	JLabel currentFrameLabel;
 	
@@ -102,6 +104,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 	private void initComponents()
 	{
 		durationTextField = new JTextField();
+		moveToFrameTextField = new JTextField();
 		frameSlider = new JSlider();
 		playPauseButton = new JButton();
 		nextFrameButton = new JButton();
@@ -287,6 +290,21 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		durationPanel.add(new JLabel("")); // Spacer
 		
 		add(durationPanel);
+		
+		// 2b. Move to Frame
+		JPanel moveToFramePanel = new JPanel(new GridLayout(1, 2));
+		moveToFramePanel.setBorder(BorderFactory.createTitledBorder(Start.Border, "<html><b>Move to Frame</b></html>"));
+		
+		moveToFrameTextField.setSize(new Dimension(62, 30));
+		moveToFrameTextField.setFont(defaultFont);
+		moveToFrameTextField.setPreferredSize(new Dimension(100, 25));
+		moveToFrameTextField.setToolTipText("Type a frame number and press Enter");
+		moveToFrameTextField.setEnabled(false);
+		moveToFrameTextField.addActionListener(e -> moveToFrame());
+		
+		moveToFramePanel.add(moveToFrameTextField);
+		moveToFramePanel.add(new JLabel("")); // Spacer
+		add(moveToFramePanel);
 		
 		
 		// 3. Current Frame
@@ -573,6 +591,44 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		}
 	}
 
+	private void moveToFrame()
+	{
+		Project project = ModelCreator.CurrentAnimProject();
+		if (project == null || project.SelectedAnimation == null) {
+			moveToFrameTextField.setText("");
+			return;
+		}
+
+		String text = moveToFrameTextField.getText();
+		if (text == null) text = "";
+		text = text.trim();
+		if (text.length() == 0) {
+			moveToFrameTextField.setText("");
+			return;
+		}
+
+		int targetFrame;
+		try {
+			targetFrame = Integer.parseInt(text);
+		} catch (Exception ex) {
+			Toolkit.getDefaultToolkit().beep();
+			moveToFrameTextField.selectAll();
+			return;
+		}
+
+		int maxFrame = project.SelectedAnimation.GetQuantityFrames() - 1;
+		if (maxFrame < 0) {
+			moveToFrameTextField.setText("");
+			return;
+		}
+
+		targetFrame = Math.max(0, Math.min(targetFrame, maxFrame));
+		moveToFrameTextField.setText("");
+
+		// Let the slider change listener drive frame syncing and UI updates
+		frameSlider.setValue(targetFrame);
+	}
+
 
 	private void setNewQuantityFrames()
 	{
@@ -695,6 +751,8 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		durationTextField.setEnabled(enabled);
 		durationTextField.setText(enabled ? project.SelectedAnimation.GetQuantityFrames() + "" : "");
+		moveToFrameTextField.setEnabled(enabled);
+		if (!enabled) moveToFrameTextField.setText("");
 		
 		playPauseButton.setEnabled(enabled);
 		prevFrameButton.setEnabled(enabled);

@@ -20,7 +20,8 @@ This repository is a **divergent branch** of **VS Model Creator (VSMC)** with ex
   - **Auto L/R renaming:** e.g. `RFemur` → `LFemur`.
   - Optional **Mirror animations** toggle (mirrors keyframes for mirrored elements).
 - **Face UV tools:** Face tab includes **Tools** with **Flip UV (L/R)** and **Flip UV (U/D)** for the selected face.
-
+- **Duplicate Only This:** Select part, select frame, and duplicate to another frame (but not the ENTIRE MODEL'S KEYFRAME DATA) Only that part.
+- **Move to Frame:** Type the frame number to jump to it!
 
 ---
 
