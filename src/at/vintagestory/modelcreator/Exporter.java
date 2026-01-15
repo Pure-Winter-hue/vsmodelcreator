@@ -324,18 +324,21 @@ public class Exporter
 				writer.write(", ");
 			}
 			writer.write("\"rotShortestDistanceX\": true");
+			bla = true;
 		}
 		if (kElem.RotShortestDistanceY) {
 			if (bla) {
 				writer.write(", ");
 			}
 			writer.write("\"rotShortestDistanceY\": true");
+			bla = true;
 		}
 		if (kElem.RotShortestDistanceZ) {
 			if (bla) {
 				writer.write(", ");
 			}
 			writer.write("\"rotShortestDistanceZ\": true");
+			bla = true;
 		}
 		
 		

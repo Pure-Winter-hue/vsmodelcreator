@@ -2,7 +2,10 @@ package at.vintagestory.modelcreator.gui.right.keyframes;
 
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.ActionEvent;
 
 import javax.swing.JComponent;
@@ -43,6 +46,15 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 
 	private void addComponents()
 	{
+		setLayout(new GridBagLayout());
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.gridx = 0;
+		gbc.weightx = 1;
+		gbc.fill = GridBagConstraints.HORIZONTAL;
+		gbc.anchor = GridBagConstraints.NORTHWEST;
+		gbc.insets = new Insets(0, 0, 0, 0);
+		int row = 0;
+
 		JPanel btnContainer = new JPanel(new GridLayout(1, 3, 4, 0));
 		btnContainer.setPreferredSize(new Dimension(196, 30));
 		
@@ -143,10 +155,19 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		});
 		
 		
-		add(btnContainer);
-		add(panelRotation);
-		add(panelPosition);
-		add(panelTools);
+		gbc.gridy = row++;
+		gbc.weighty = 0;
+		add(btnContainer, gbc);
+
+		gbc.gridy = row++;
+		add(panelRotation, gbc);
+
+		gbc.gridy = row++;
+		add(panelPosition, gbc);
+
+		gbc.gridy = row++;
+		gbc.weighty = 1;
+		add(panelTools, gbc);
 		
 		updateValues(null);
 	}

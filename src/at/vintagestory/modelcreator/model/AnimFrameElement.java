@@ -75,7 +75,7 @@ public class AnimFrameElement implements IDrawable
 	}
 	
 	public boolean IsUseless() {
-		boolean useless = !PositionSet && !RotationSet && !StretchSet;
+		boolean useless = !PositionSet && !RotationSet && !StretchSet && !RotShortestDistanceX && !RotShortestDistanceY && !RotShortestDistanceZ;
 		
 		for (IDrawable elem : ChildElements) {
 			AnimFrameElement kf = (AnimFrameElement)elem;
