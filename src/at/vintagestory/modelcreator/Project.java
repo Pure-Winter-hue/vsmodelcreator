@@ -745,6 +745,7 @@ public void removeCurrentElement() {
 	{
 		tree.selectElementByOpenGLName(openGlName);
 		SelectedElement = tree.getSelectedElement();
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
 		
 		if (SelectedElement != null) {
 			for (int i = 0; i < SelectedElement.getAllFaces().length; i++) {
@@ -755,6 +756,18 @@ public void removeCurrentElement() {
 			}
 		}
 		
+		ModelCreator.updateValues(null);
+	}
+	
+	/**
+	 * Select an element by the OpenGL name of one of its faces, without changing the currently selected face.
+	 * Used for click-to-select in Cube/Keyframe mode.
+	 */
+	public void selectElementByOpenGLName(int openGlName)
+	{
+		tree.selectElementByOpenGLName(openGlName);
+		SelectedElement = tree.getSelectedElement();
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
 		ModelCreator.updateValues(null);
 	}
 	

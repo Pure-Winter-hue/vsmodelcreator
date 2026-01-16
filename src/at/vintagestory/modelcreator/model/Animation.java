@@ -82,11 +82,23 @@ public class Animation
 
 	
 	void lerpKeyFrameElement(int keyFrameIndex, AnimFrameElement curKelem) {
+		// Safety: Keyframes store AnimatedElementName persistently, but AnimatedElement
+		// references can become null (or stale) after certain operations. Try to
+		// resolve before interpolating so we don't crash during frame calculation.
+		if (curKelem != null && curKelem.AnimatedElement == null && curKelem.AnimatedElementName != null) {
+			Project proj = ModelCreator.currentProject;
+			if (proj != null) {
+				curKelem.AnimatedElement = proj.findElement(curKelem.AnimatedElementName);
+			}
+		}
+		if (curKelem == null || curKelem.AnimatedElementName == null) {
+			return;
+		}
 		
 		for (int flag = 0; flag < 3; flag++) {
 			if (!curKelem.IsSet(flag)) continue;
 			
-			AnimFrameElement nextkelem = getNextKeyFrameElementForFlag(keyFrameIndex, curKelem.AnimatedElement, flag);
+			AnimFrameElement nextkelem = getNextKeyFrameElementForFlag(keyFrameIndex, curKelem.AnimatedElement, curKelem.AnimatedElementName, flag);
 
 			int startFrame;
 			int frames;
@@ -104,10 +116,18 @@ public class Animation
 			
 			for (int x = 0; x < frames; x++) {
 				int frame = (startFrame + x) % quantityFrames;				
-				AnimFrameElement kelem = allFrames.get(frame).GetAnimFrameElementRec(curKelem.AnimatedElement);
+				AnimationFrame fr = allFrames.get(frame);
+				AnimFrameElement kelem = null;
+				if (curKelem.AnimatedElement != null) {
+					kelem = fr.GetAnimFrameElementRec(curKelem.AnimatedElement);
+				}
 				if (kelem == null) {
-					System.out.println("kelem for frame " + frame + " is null, will crash.");
-					kelem = allFrames.get(frame).GetAnimFrameElementRec(curKelem.AnimatedElement);
+					kelem = fr.GetAnimFrameElementRecByName(curKelem.AnimatedElementName);
+				}
+				if (kelem == null) {
+					// If the element can't be found in the generated frame tree, skip instead of crashing.
+					// (This can happen when keyframe references are temporarily out of sync.)
+					continue;
 				}
 				
 				lerpKeyFrameElement(kelem, curKelem, nextkelem, flag, x);
@@ -121,7 +141,7 @@ public class Animation
 	}
 	
 	
-	AnimFrameElement getNextKeyFrameElementForFlag(int index, Element forElement, int forFlag) {
+	AnimFrameElement getNextKeyFrameElementForFlag(int index, Element forElement, String forElementName, int forFlag) {
 		AnimationFrame nextkeyframe;
 		
 		int j = index + 1;
@@ -129,7 +149,13 @@ public class Animation
 		while (tries-- > 0) {
 			nextkeyframe = keyframes[j % keyframes.length];
 			
-			AnimFrameElement kelem = nextkeyframe.GetAnimFrameElementRec(forElement);
+			AnimFrameElement kelem = null;
+			if (forElement != null) {
+				kelem = nextkeyframe.GetAnimFrameElementRec(forElement);
+			}
+			if (kelem == null) {
+				kelem = nextkeyframe.GetAnimFrameElementRecByName(forElementName);
+			}
 			if (kelem != null && kelem.IsSet(forFlag)) {
 				return kelem;
 			}

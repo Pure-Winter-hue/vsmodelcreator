@@ -146,14 +146,27 @@ public class FacePanel extends JPanel implements IValueUpdater
 	public void updateValues(JComponent byGuiElem)
 	{		
 		Element cube = manager.getCurrentElement();
-		if (cube != null)
-		{
-			menuList.setSelectedIndex(cube.getSelectedFaceIndex());
-			rotation.setEnabled(true);
-			rotation.setValue(cube.getSelectedFace().getRotation());
+		Face selectedFace = null;
+		if (cube != null) {
+			int faceIndex = cube.getSelectedFaceIndex();
+			// Guard against elements that don't have a selected face yet (selectedFaceIndex = -1)
+			// and against any invalid index.
+			if (faceIndex < 0 || faceIndex >= 6) {
+				faceIndex = 0;
+			}
+			// Ensure downstream panels always have a valid selected face.
+			selectedFace = cube.getSelectedFace();
+			if (selectedFace == null) {
+				cube.setSelectedFace(faceIndex);
+				selectedFace = cube.getSelectedFace();
+			}
+			menuList.setSelectedIndex(faceIndex);
 		}
-		else
-		{
+
+		if (selectedFace != null) {
+			rotation.setEnabled(true);
+			rotation.setValue(selectedFace.getRotation());
+		} else {
 			rotation.setEnabled(false);
 			rotation.setValue(0);
 		}
@@ -163,7 +176,7 @@ public class FacePanel extends JPanel implements IValueUpdater
 		panelElemUV.updateValues(byGuiElem);
 		panelElemUV.setVisible(ModelCreator.currentProject.EntityTextureMode);
 		
-		boolean manualUnwrap = !ModelCreator.currentProject.EntityTextureMode || cube == null || !cube.isAutoUnwrapEnabled() || !cube.getSelectedFace().isAutoUVEnabled();
+		boolean manualUnwrap = !ModelCreator.currentProject.EntityTextureMode || cube == null || !cube.isAutoUnwrapEnabled() || selectedFace == null || !selectedFace.isAutoUVEnabled();
 		panelFaceUV.setVisible(manualUnwrap);
 		sliderPanel.setVisible(manualUnwrap);
 		

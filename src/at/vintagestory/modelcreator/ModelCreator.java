@@ -125,6 +125,10 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	
 
 	private int lastMouseX, lastMouseY;
+	// Mouse click tracking (for click-to-select without requiring CTRL)
+	private int mouseDownX, mouseDownY;
+	private int mouseDownButton = -1;
+	private boolean mouseDownWithCtrl;
 	boolean mouseDownOnLeftPanel;
 	boolean mouseDownOnCenterPanel;
 	boolean mouseDownOnRightPanel;
@@ -359,6 +363,49 @@ public class ModelCreator extends JFrame implements ITextureCallback
 		rightTopPanel = new RightPanel(this);
 
 		leftKeyframesPanel = new LeftKeyFramesPanel(rightTopPanel);
+<<<<<<< Updated upstream
+=======
+		leftKeyframesScroll = new JScrollPane(leftKeyframesPanel);
+		leftKeyframesScroll.setBorder(BorderFactory.createEmptyBorder());
+		leftKeyframesScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		leftKeyframesScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+		leftKeyframesScroll.getVerticalScrollBar().setUnitIncrement(16);
+		// Put the scrollbar on the left, but keep the panel's contents LTR
+		leftKeyframesScroll.setComponentOrientation(ComponentOrientation.RIGHT_TO_LEFT);
+		leftKeyframesScroll.getViewport().setComponentOrientation(ComponentOrientation.LEFT_TO_RIGHT);
+
+		leftKeyframesScroll.setWheelScrollingEnabled(true);
+
+		// Make mouse wheel scrolling work anywhere over the left panel (not only when hovering the scrollbar).
+		Toolkit.getDefaultToolkit().addAWTEventListener(new java.awt.event.AWTEventListener() {
+			@Override
+			public void eventDispatched(AWTEvent event) {
+				if (!(event instanceof java.awt.event.MouseWheelEvent)) return;
+				if (!leftKeyframesScroll.isShowing()) return;
+
+				java.awt.event.MouseWheelEvent mwe = (java.awt.event.MouseWheelEvent) event;
+				Component src = mwe.getComponent();
+				if (src == null) return;
+
+				// Only handle wheel events originating from the left panel subtree
+				if (!SwingUtilities.isDescendingFrom(src, leftKeyframesScroll)) return;
+
+				// Let nested scroll panes (e.g. keyframe table) handle their own wheel scrolling.
+				JScrollPane nested = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, src);
+				if (nested != null && nested != leftKeyframesScroll) return;
+
+				// If the wheel is over the scrollbar itself, let the scrollbar handle it.
+				if (SwingUtilities.isDescendingFrom(src, leftKeyframesScroll.getVerticalScrollBar())) return;
+
+				javax.swing.JScrollBar bar = leftKeyframesScroll.getVerticalScrollBar();
+				int units = mwe.getUnitsToScroll();
+				int delta = units * bar.getUnitIncrement(units);
+				bar.setValue(bar.getValue() + delta);
+				mwe.consume();
+			}
+		}, AWTEvent.MOUSE_WHEEL_EVENT_MASK);
+
+>>>>>>> Stashed changes
 		leftKeyframesPanel.setVisible(false);
 		add(leftKeyframesPanel, BorderLayout.WEST);
 		
@@ -728,12 +775,18 @@ public class ModelCreator extends JFrame implements ITextureCallback
 		
 		
 		
-		if (Mouse.isButtonDown(0) || Mouse.isButtonDown(1))
+		// Any mouse button down starts a "grabbing" interaction (selection, transform, or camera control)
+		if (Mouse.isButtonDown(0) || Mouse.isButtonDown(1) || Mouse.isButtonDown(2))
 		{
 			if (!grabbing)
 			{
 				lastMouseX = Mouse.getX();
 				lastMouseY = Mouse.getY();
+				// Remember initial click position so we can distinguish click-to-select from camera drags
+				mouseDownX = lastMouseX;
+				mouseDownY = lastMouseY;
+				mouseDownButton = Mouse.isButtonDown(0) ? 0 : (Mouse.isButtonDown(1) ? 1 : (Mouse.isButtonDown(2) ? 2 : -1));
+				mouseDownWithCtrl = leftControl;
 				grabbing = true;
 			}
 			
@@ -745,6 +798,28 @@ public class ModelCreator extends JFrame implements ITextureCallback
 		}
 		else
 		{
+			// Mouse button(s) released
+			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl) {
+				int dx = Math.abs(Mouse.getX() - mouseDownX);
+				int dy = Math.abs(Mouse.getY() - mouseDownY);
+				// Treat small mouse movement as a click (prevents selecting while panning/rotating the camera)
+				if (dx <= 3 && dy <= 3) {
+					int openGlName = getElementGLNameAtPos(mouseDownX, mouseDownY);
+					if (openGlName >= 0) {
+						// Cube + Keyframe: select element. Face: select element + face.
+						if (currentRightTab == 1) {
+							currentProject.selectElementAndFaceByOpenGLName(openGlName);
+						} else {
+							currentProject.selectElementByOpenGLName(openGlName);
+						}
+						SwingUtilities.invokeLater(new Runnable() {
+							@Override
+							public void run() { updateValues(null); }
+						});
+					}
+				}
+			}
+
 			grabbedElem = null;
 			
 			if (modelrenderer.renderedLeftSidebar != null) {
@@ -866,7 +941,12 @@ public class ModelCreator extends JFrame implements ITextureCallback
 		}
 		else
 		{
-			if (Mouse.isButtonDown(0))
+			// Camera controls:
+			// - Pan: hold Middle Mouse Button OR hold Alt + Right Mouse Button
+			// - Rotate: hold Right Mouse Button
+			// Left Mouse Button never moves the camera (reserved for selection/transform)
+			boolean altDown = Keyboard.isKeyDown(Keyboard.KEY_LMENU) || Keyboard.isKeyDown(Keyboard.KEY_RMENU);
+			if (Mouse.isButtonDown(2) || (altDown && Mouse.isButtonDown(1)))
 			{
 				final float modifier = (cameraMod * 0.05f);
 				modelrenderer.camera.addX((float) (Mouse.getDX() * 0.01F) * modifier);
