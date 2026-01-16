@@ -145,10 +145,15 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 				creator.setSidebar(null);
 			}
 			
-			ModelCreator.leftKeyframesPanel.setVisible(tabbedPane.getSelectedIndex() == 2);
-			if (tabbedPane.getSelectedIndex() == 2) {
+			boolean keyframeMode = tabbedPane.getSelectedIndex() == 2;
+			ModelCreator.leftKeyframesPanel.setVisible(keyframeMode);
+			if (ModelCreator.leftKeyframesScroll != null) ModelCreator.leftKeyframesScroll.setVisible(keyframeMode);
+			if (keyframeMode) {
 				ModelCreator.leftKeyframesPanel.Load();
 			}
+			// Force a relayout, otherwise the left pane sometimes only appears after a manual window resize
+			creator.revalidate();
+			creator.repaint();
 			
 			ModelCreator.renderAttachmentPoints = tabbedPane.getSelectedIndex() == 3;
 			ModelCreator.guiMain.itemSaveGifAnimation.setEnabled(tabbedPane.getSelectedIndex() == 2 && ModelCreator.currentProject != null && ModelCreator.currentProject.SelectedAnimation != null);

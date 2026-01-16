@@ -137,7 +137,9 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	public LeftSidebar uvSidebar;
 	public static GuiMenu guiMain;
 	public static LeftKeyFramesPanel leftKeyframesPanel;
-	public static boolean renderAttachmentPoints;
+	
+	public static javax.swing.JScrollPane leftKeyframesScroll;
+public static boolean renderAttachmentPoints;
 
 	
 	public ModelRenderer modelrenderer;
@@ -359,8 +361,18 @@ public class ModelCreator extends JFrame implements ITextureCallback
 		rightTopPanel = new RightPanel(this);
 
 		leftKeyframesPanel = new LeftKeyFramesPanel(rightTopPanel);
+		leftKeyframesScroll = new JScrollPane(leftKeyframesPanel);
+		leftKeyframesScroll.setBorder(BorderFactory.createEmptyBorder());
+		leftKeyframesScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		leftKeyframesScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+		leftKeyframesScroll.getVerticalScrollBar().setUnitIncrement(16);
+		// Put the scrollbar on the left, but keep the panel's contents LTR
+		leftKeyframesScroll.setComponentOrientation(ComponentOrientation.RIGHT_TO_LEFT);
+		leftKeyframesScroll.getViewport().setComponentOrientation(ComponentOrientation.LEFT_TO_RIGHT);
+
 		leftKeyframesPanel.setVisible(false);
-		add(leftKeyframesPanel, BorderLayout.WEST);
+		leftKeyframesScroll.setVisible(false);
+		add(leftKeyframesScroll, BorderLayout.WEST);
 		
 		// Canvas stuff
 		canvas = new Canvas();
