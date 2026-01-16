@@ -25,10 +25,13 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 	
 	private ElementKeyFrameOffsetPanel panelPosition;
 	private ElementKeyFrameRotationPanel panelRotation;
+	private ElementKeyFrameScalePanel panelScale;
+	private ElementKeyFrameOriginPanel panelOrigin;
 	private KeyFrameToolsPanel panelTools;
 	JToggleButton btnPos;
 	JToggleButton btnRot;
-	JToggleButton btnStretch;
+	JToggleButton btnScale;
+	JToggleButton btnOrigin;
 	
 	public RightKeyFramesPanel()
 	{
@@ -40,6 +43,8 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 	{
 		panelPosition = new ElementKeyFrameOffsetPanel(this);
 		panelRotation = new ElementKeyFrameRotationPanel(this);
+		panelScale = new ElementKeyFrameScalePanel(this);
+		panelOrigin = new ElementKeyFrameOriginPanel(this);
 		panelTools = new KeyFrameToolsPanel();
 	}
 
@@ -55,7 +60,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		gbc.insets = new Insets(0, 0, 0, 0);
 		int row = 0;
 
-		JPanel btnContainer = new JPanel(new GridLayout(1, 3, 4, 0));
+		JPanel btnContainer = new JPanel(new GridLayout(1, 4, 4, 0));
 		btnContainer.setPreferredSize(new Dimension(196, 30));
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 11);
@@ -124,9 +129,9 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		
 		
-		btnStretch = new JToggleButton("Stretch");
-		btnStretch.setFont(defaultFont);
-		btnStretch.addActionListener(a ->
+		btnScale = new JToggleButton("Scale");
+		btnScale.setFont(defaultFont);
+		btnScale.addActionListener(a ->
 		{
 			ensureAnimationExists();
 			
@@ -140,7 +145,7 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 			AnimFrameElement frameElem = aframe.GetAnimFrameElementRec(elem);
 
 			
-			AnimFrameElement keyFrameElem = ModelCreator.currentProject.SelectedAnimation.ToggleStretch(ModelCreator.rightTopPanel.getCurrentElement(), btnStretch.isSelected());
+			AnimFrameElement keyFrameElem = ModelCreator.currentProject.SelectedAnimation.ToggleStretch(ModelCreator.rightTopPanel.getCurrentElement(), btnScale.isSelected());
 			
 			if ((a.getModifiers() & ActionEvent.SHIFT_MASK) != 1) {
 				keyFrameElem.setStretchX(frameElem.getStretchX());
@@ -148,11 +153,41 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 				keyFrameElem.setStretchZ(frameElem.getStretchZ());
 			}
 			
-			ModelCreator.updateValues(btnStretch);
+			ModelCreator.updateValues(btnScale);
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 			
 			copyKeyFrameElemToBackdrop(elem);
 		});
+		btnContainer.add(btnScale);
+
+		btnOrigin = new JToggleButton("Origin");
+		btnOrigin.setFont(defaultFont);
+		btnOrigin.addActionListener(a ->
+		{
+			ensureAnimationExists();
+
+			ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+			Element elem = ModelCreator.rightTopPanel.getCurrentElement();
+			Animation anim = ModelCreator.currentProject.SelectedAnimation;
+			int currentFrame = anim.currentFrame;
+			AnimationFrame aframe = anim.allFrames.get(currentFrame);
+			AnimFrameElement frameElem = aframe.GetAnimFrameElementRec(elem);
+
+			AnimFrameElement keyFrameElem = ModelCreator.currentProject.SelectedAnimation.ToggleOrigin(elem, btnOrigin.isSelected());
+
+			if ((a.getModifiers() & ActionEvent.SHIFT_MASK) != 1) {
+				keyFrameElem.setOriginX(frameElem.getOriginX());
+				keyFrameElem.setOriginY(frameElem.getOriginY());
+				keyFrameElem.setOriginZ(frameElem.getOriginZ());
+			}
+
+			ModelCreator.updateValues(btnOrigin);
+			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+
+			copyKeyFrameElemToBackdrop(elem);
+		});
+		btnContainer.add(btnOrigin);
 		
 		
 		gbc.gridy = row++;
@@ -163,7 +198,13 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		add(panelRotation, gbc);
 
 		gbc.gridy = row++;
+		add(panelOrigin, gbc);
+
+		gbc.gridy = row++;
 		add(panelPosition, gbc);
+
+		gbc.gridy = row++;
+		add(panelScale, gbc);
 
 		gbc.gridy = row++;
 		gbc.weighty = 1;
@@ -223,10 +264,14 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		boolean enabled = project.SelectedAnimation != null && elem != null && project.GetFrameCount() > 0;
 		panelPosition.setAnimActive(ModelCreator.AnimationPlaying());
 		panelRotation.setAnimActive(ModelCreator.AnimationPlaying());
+		panelScale.setAnimActive(ModelCreator.AnimationPlaying());
+		panelOrigin.setAnimActive(ModelCreator.AnimationPlaying());
 		
 		if (ModelCreator.AnimationPlaying()) {
 			btnPos.setEnabled(false);
 			btnRot.setEnabled(false);
+			btnScale.setEnabled(false);
+			btnOrigin.setEnabled(false);
 			return;
 		}
 		
@@ -237,19 +282,25 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		panelPosition.enabled = enabled && keyframeElem != null && keyframeElem.PositionSet;
 		panelRotation.enabled = enabled && keyframeElem != null && keyframeElem.RotationSet;
+		panelScale.enabled = enabled && keyframeElem != null && keyframeElem.StretchSet;
+		panelOrigin.enabled = enabled && keyframeElem != null && keyframeElem.OriginSet;
 		
 		btnPos.setSelected(panelPosition.enabled);
 		btnRot.setSelected(panelRotation.enabled);
-		//btnStretch.setSelected(enabled && keyframeElem != null && keyframeElem.StretchSet);
+		btnScale.setSelected(panelScale.enabled);
+		btnOrigin.setSelected(panelOrigin.enabled);
 		
 	
 		panelRotation.toggleFields(keyframeElem != null ? getCurrentElement() : null, byGuiElem);
+		panelOrigin.toggleFields(keyframeElem != null ? getCurrentElement() : null, byGuiElem);
 		panelPosition.toggleFields(keyframeElem != null ? getCurrentElement() : null, byGuiElem);
+		panelScale.toggleFields(keyframeElem != null ? getCurrentElement() : null, byGuiElem);
 		
 		btnPos.setEnabled(enabled);
 		btnRot.setEnabled(enabled);
+		btnScale.setEnabled(enabled);
+		btnOrigin.setEnabled(enabled);
 		panelTools.updateValues(byGuiElem);
-		//btnStretch.setEnabled(enabled);		
 	}
 	
 

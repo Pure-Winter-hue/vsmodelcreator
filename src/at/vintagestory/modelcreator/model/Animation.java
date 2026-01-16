@@ -82,9 +82,6 @@ public class Animation
 
 	
 	void lerpKeyFrameElement(int keyFrameIndex, AnimFrameElement curKelem) {
-		// Safety: Keyframes store AnimatedElementName persistently, but AnimatedElement
-		// references can become null (or stale) after certain operations. Try to
-		// resolve before interpolating so we don't crash during frame calculation.
 		if (curKelem != null && curKelem.AnimatedElement == null && curKelem.AnimatedElementName != null) {
 			Project proj = ModelCreator.currentProject;
 			if (proj != null) {
@@ -156,6 +153,7 @@ public class Animation
 			if (kelem == null) {
 				kelem = nextkeyframe.GetAnimFrameElementRecByName(forElementName);
 			}
+			AnimFrameElement kelem = nextkeyframe.GetAnimFrameElementRec(forElement);
 			if (kelem != null && kelem.IsSet(forFlag)) {
 				return kelem;
 			}
@@ -216,7 +214,17 @@ public class Animation
 			kElem.setStretchX(lerp(t, prev.getRotationX(), next.getRotationX()));
 			kElem.setStretchY(lerp(t, prev.getRotationY(), next.getRotationY()));
 			kElem.setStretchZ(lerp(t, prev.getRotationZ(), next.getRotationZ()));
+		} else if (forFlag == 2) {
+			kElem.setStretchX(lerp(t, prev.getStretchX(), next.getStretchX()));
+			kElem.setStretchY(lerp(t, prev.getStretchY(), next.getStretchY()));
+			kElem.setStretchZ(lerp(t, prev.getStretchZ(), next.getStretchZ()));
 			kElem.StretchSet = true;
+		} else {
+			// Origin offsets (pivot). Stored as delta to the element's base rotationOrigin.
+			kElem.setOriginX(lerp(t, prev.getOriginX(), next.getOriginX()));
+			kElem.setOriginY(lerp(t, prev.getOriginY(), next.getOriginY()));
+			kElem.setOriginZ(lerp(t, prev.getOriginZ(), next.getOriginZ()));
+			kElem.OriginSet = true;
 		}
 	}
 	
@@ -279,9 +287,11 @@ public class Animation
 
 	public AnimFrameElement ToggleStretch(Element elem, boolean on) {
 		AnimFrameElement keyframe = GetOrCreateKeyFrameElement(elem, currentFrame);
-		keyframe.StretchSet = on;
-		
+		// Note: the order matters here; we must compare before assigning,
+		// otherwise the early-return would always trigger.
 		if (keyframe.StretchSet == on) return keyframe;
+		
+		keyframe.StretchSet = on;
 		ModelCreator.ignoreDidModify++;
 		if (!on) RemoveKeyFramesIfUseless(keyframe);
 		ModelCreator.ignoreDidModify--;
@@ -289,7 +299,19 @@ public class Animation
 		
 		return keyframe;
 	}
-	
+
+	public AnimFrameElement ToggleOrigin(Element elem, boolean on) {
+		AnimFrameElement keyframe = GetOrCreateKeyFrameElement(elem, currentFrame);
+		if (keyframe.OriginSet == on) return keyframe;
+
+		keyframe.OriginSet = on;
+		ModelCreator.ignoreDidModify++;
+		if (!on) RemoveKeyFramesIfUseless(keyframe);
+		ModelCreator.ignoreDidModify--;
+		ModelCreator.DidModify();
+		return keyframe;
+	}
+
 	
 	public void RemoveKeyFramesIfUseless(AnimFrameElement keyframe) {
 		if (keyframe.IsUseless()) {

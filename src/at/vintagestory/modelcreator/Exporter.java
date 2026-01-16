@@ -254,7 +254,7 @@ public class Exporter
 		int k = 0;
 		for (int i = 0; i < keyframeElementsFlat.size(); i++) {
 			AnimFrameElement kElem = keyframeElementsFlat.get(i);
-			if (!kElem.PositionSet && !kElem.RotationSet && !kElem.StretchSet) continue;
+			if (!kElem.PositionSet && !kElem.RotationSet && !kElem.StretchSet && !kElem.OriginSet) continue;
 
 			if (k > 0) {
 				writer.write(",");
@@ -318,7 +318,18 @@ public class Exporter
 			writer.write(", \"stretchZ\": " + kElem.getStretchZ());
 			bla=true;
 		}
-		
+
+		if (kElem.OriginSet) {
+			if (bla) {
+				writer.write(", ");
+			}
+			// Origin offsets (pivot) are stored as delta to the element's base rotationOrigin.
+			writer.write("\"originX\": " + d2s(kElem.getOriginX()));
+			writer.write(", \"originY\": " + d2s(kElem.getOriginY()));
+			writer.write(", \"originZ\": " + d2s(kElem.getOriginZ()));
+			bla = true;
+		}
+
 		if (kElem.RotShortestDistanceX) {
 			if (bla) {
 				writer.write(", ");

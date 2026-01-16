@@ -381,6 +381,13 @@ public class Importer
 			kelem.setStretchY(obj.get("stretchY").getAsDouble());
 			kelem.setStretchZ(obj.get("stretchZ").getAsDouble());
 		}
+
+		if (obj.has("originX") || obj.has("originY") || obj.has("originZ")) {
+			kelem.OriginSet = true;
+			kelem.setOriginX(obj.get("originX").getAsDouble());
+			kelem.setOriginY(obj.get("originY").getAsDouble());
+			kelem.setOriginZ(obj.get("originZ").getAsDouble());
+		}
 		
 		if (obj.has("rotShortestDistanceX")) {
 			kelem.RotShortestDistanceX = obj.get("rotShortestDistanceX").getAsBoolean();

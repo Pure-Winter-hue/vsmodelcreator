@@ -25,6 +25,11 @@ public class AnimFrameElement implements IDrawable
 	public boolean PositionSet;
 	public boolean RotationSet;
 	public boolean StretchSet;
+	/**
+	 * Keyframeable origin offset (added to the element's base rotationOrigin).
+	 * This lets you animate the pivot for rotation and scaling.
+	 */
+	public boolean OriginSet;
 	public boolean RotShortestDistanceX;
 	public boolean RotShortestDistanceY;
 	public boolean RotShortestDistanceZ;
@@ -75,7 +80,7 @@ public class AnimFrameElement implements IDrawable
 	}
 	
 	public boolean IsUseless() {
-		boolean useless = !PositionSet && !RotationSet && !StretchSet && !RotShortestDistanceX && !RotShortestDistanceY && !RotShortestDistanceZ;
+		boolean useless = !PositionSet && !RotationSet && !StretchSet && !OriginSet && !RotShortestDistanceX && !RotShortestDistanceY && !RotShortestDistanceZ;
 		
 		for (IDrawable elem : ChildElements) {
 			AnimFrameElement kf = (AnimFrameElement)elem;
@@ -88,7 +93,8 @@ public class AnimFrameElement implements IDrawable
 	public boolean IsSet(int flagIndex) {
 		if (flagIndex == 0) return PositionSet;
 		if (flagIndex == 1) return RotationSet;
-		return StretchSet;
+		if (flagIndex == 2) return StretchSet;
+		return OriginSet;
 	}
 
 	
@@ -474,6 +480,7 @@ public class AnimFrameElement implements IDrawable
 		cloned.PositionSet = PositionSet;
 		cloned.RotationSet = RotationSet;
 		cloned.StretchSet = StretchSet;
+		cloned.OriginSet = OriginSet;
 		cloned.rotationX = rotationX;
 		cloned.rotationY = rotationY;
 		cloned.rotationZ = rotationZ;
@@ -504,6 +511,7 @@ public class AnimFrameElement implements IDrawable
 		PositionSet = kelem.PositionSet;
 		RotationSet = kelem.RotationSet;
 		StretchSet = kelem.StretchSet;
+		OriginSet = kelem.OriginSet;
 		offsetX = kelem.offsetX;
 		offsetY = kelem.offsetY;
 		offsetZ = kelem.offsetZ;
