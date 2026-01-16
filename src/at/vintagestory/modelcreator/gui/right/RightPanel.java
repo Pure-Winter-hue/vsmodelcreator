@@ -3,6 +3,9 @@ package at.vintagestory.modelcreator.gui.right;
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
 import javax.swing.*;
 
 import org.lwjgl.input.Mouse;
@@ -64,6 +67,7 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 		int width = ModelCreator.prefs.getInt("rightBarWidth", 215);
 		scrollPane.setPreferredSize(new Dimension(width-10, ModelCreator.elementTreeHeight + dy));
 		add(scrollPane);
+		initElementTreeResize();
 
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 14);
@@ -145,10 +149,15 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 				creator.setSidebar(null);
 			}
 			
-			ModelCreator.leftKeyframesPanel.setVisible(tabbedPane.getSelectedIndex() == 2);
-			if (tabbedPane.getSelectedIndex() == 2) {
+			boolean keyframeMode = tabbedPane.getSelectedIndex() == 2;
+			ModelCreator.leftKeyframesPanel.setVisible(keyframeMode);
+			if (ModelCreator.leftKeyframesScroll != null) ModelCreator.leftKeyframesScroll.setVisible(keyframeMode);
+			if (keyframeMode) {
 				ModelCreator.leftKeyframesPanel.Load();
 			}
+			// Force a relayout, otherwise the left pane sometimes only appears after a manual window resize
+			creator.revalidate();
+			creator.repaint();
 			
 			ModelCreator.renderAttachmentPoints = tabbedPane.getSelectedIndex() == 3;
 			ModelCreator.guiMain.itemSaveGifAnimation.setEnabled(tabbedPane.getSelectedIndex() == 2 && ModelCreator.currentProject != null && ModelCreator.currentProject.SelectedAnimation != null);
@@ -222,6 +231,118 @@ public ModelCreator getCreator()
 	public void updateFrame(JComponent byGuiElem) {
 		rightKeyFramesPanel.updateFrame(byGuiElem);
 	}
+
+	private void initElementTreeResize()
+	{
+		// A small draggable "grip" in the lower-right corner of the element tree scrollpane
+		// (the gray square between scrollbars). Dragging resizes the element tree height.
+		JPanel corner = new JPanel();
+		corner.setOpaque(false);
+		corner.setPreferredSize(new Dimension(16, 16));
+		elementTreeResizeCorner = corner;
+		scrollPane.setCorner(JScrollPane.LOWER_RIGHT_CORNER, corner);
+
+		MouseAdapter mouseAdapter = new MouseAdapter() {
+			@Override
+			public void mousePressed(MouseEvent e) {
+				if (!SwingUtilities.isLeftMouseButton(e)) return;
+				if (!isOverElementTreeResizeGrip(e)) return;
+				nowResizingElementTree = true;
+				elementTreeGrabMouseY = e.getYOnScreen();
+				elementTreeGrabHeight = ModelCreator.elementTreeHeight;
+				updateElementTreeResizeCursor(e, true);
+			}
+
+			@Override
+			public void mouseReleased(MouseEvent e) {
+				nowResizingElementTree = false;
+				updateElementTreeResizeCursor(e, false);
+			}
+
+			@Override
+			public void mouseDragged(MouseEvent e) {
+				if (!nowResizingElementTree) return;
+				int delta = e.getYOnScreen() - elementTreeGrabMouseY;
+				int newHeight = elementTreeGrabHeight + delta;
+				setElementTreeHeight(newHeight);
+				updateElementTreeResizeCursor(e, true);
+			}
+
+			@Override
+			public void mouseMoved(MouseEvent e) {
+				updateElementTreeResizeCursor(e, false);
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e) {
+				if (!nowResizingElementTree) {
+					if (overElementTreeResizeGrip) {
+						setElementTreeResizeCursor(Cursor.getDefaultCursor());
+						overElementTreeResizeGrip = false;
+					}
+				}
+			}
+		};
+
+		// Attach to multiple components so the grip works even when hovering over the content area.
+		scrollPane.addMouseListener(mouseAdapter);
+		scrollPane.addMouseMotionListener(mouseAdapter);
+		scrollPane.getViewport().addMouseListener(mouseAdapter);
+		scrollPane.getViewport().addMouseMotionListener(mouseAdapter);
+		tree.jtree.addMouseListener(mouseAdapter);
+		tree.jtree.addMouseMotionListener(mouseAdapter);
+		corner.addMouseListener(mouseAdapter);
+		corner.addMouseMotionListener(mouseAdapter);
+	}
+
+	private boolean isOverElementTreeResizeGrip(MouseEvent e)
+	{
+		if (elementTreeResizeCorner != null && e.getComponent() == elementTreeResizeCorner) return true;
+		if (scrollPane == null) return false;
+		Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), scrollPane);
+		int grip = 6;
+		return p.y >= scrollPane.getHeight() - grip;
+	}
+
+	private void updateElementTreeResizeCursor(MouseEvent e, boolean dragging)
+	{
+		boolean overGrip = dragging || isOverElementTreeResizeGrip(e);
+		if (overGrip) {
+			int cursor = (elementTreeResizeCorner != null && e.getComponent() == elementTreeResizeCorner) ? Cursor.SE_RESIZE_CURSOR : Cursor.S_RESIZE_CURSOR;
+			setElementTreeResizeCursor(Cursor.getPredefinedCursor(cursor));
+			overElementTreeResizeGrip = true;
+		} else if (overElementTreeResizeGrip) {
+			setElementTreeResizeCursor(Cursor.getDefaultCursor());
+			overElementTreeResizeGrip = false;
+		}
+	}
+
+	private void setElementTreeResizeCursor(Cursor cursor)
+	{
+		// Set it on the subtree so it feels consistent while moving between inner components.
+		if (scrollPane != null) scrollPane.setCursor(cursor);
+		if (scrollPane != null && scrollPane.getViewport() != null) scrollPane.getViewport().setCursor(cursor);
+		if (tree != null && tree.jtree != null) tree.jtree.setCursor(cursor);
+		if (elementTreeResizeCorner != null) elementTreeResizeCorner.setCursor(cursor);
+	}
+
+	public void setElementTreeHeight(int newHeight)
+	{
+		// Keep it within a reasonable range to avoid UI breakage.
+		newHeight = Math.max(140, Math.min(1100, newHeight));
+		if (newHeight == ModelCreator.elementTreeHeight) return;
+		ModelCreator.elementTreeHeight = newHeight;
+		ModelCreator.prefs.putInt("elementTreeHeight", newHeight);
+
+		SwingUtilities.invokeLater(() -> {
+			int width = ModelCreator.prefs.getInt("rightBarWidth", 215);
+			scrollPane.setPreferredSize(new Dimension(width - 10, ModelCreator.elementTreeHeight + dy));
+			setLayout(dy);
+			revalidate();
+			repaint();
+			ModelCreator.Instance.revalidate();
+		});
+	}
 	
 	
 	
@@ -229,6 +350,13 @@ public ModelCreator getCreator()
 	boolean nowResizingSidebar;
 	int lastGrabMouseX;
 	boolean overSidebar;
+
+	// Element tree height resizing (drag bottom edge or corner between scrollbars)
+	private boolean nowResizingElementTree;
+	private int elementTreeGrabMouseY;
+	private int elementTreeGrabHeight;
+	private boolean overElementTreeResizeGrip;
+	private JComponent elementTreeResizeCorner;
 
 	public void onMouseDownOnRightPanel()
 	{

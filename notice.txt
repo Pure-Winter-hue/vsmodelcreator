@@ -1,0 +1,10 @@
+NOTICE
+
+This product includes software developed by:
+- MrCrayfish (Copyright 2016)
+- Tyron (Copyright 2018)
+
+Modifications:
+- Portions Copyright (c) 2026 Pure Winter
+- Original work and modifications are licensed under the Apache License, Version 2.0.
+- Modifications are identified in the repository history / commits.
