@@ -90,6 +90,40 @@ public class AnimationFrame
 	{
 		return GetAnimFrameElementRec(animatedElement, Elements); 
 	}
+
+	/**
+	 * Resolve an animation frame element by its animated element name.
+	 *
+	 * This is primarily a safety net for situations where the Element instance
+	 * reference differs (e.g. after reload/undo), but the element name remains
+	 * stable.
+	 */
+	public AnimFrameElement GetAnimFrameElementRecByName(String animatedElementName)
+	{
+		if (animatedElementName == null) return null;
+		return GetAnimFrameElementRecByName(animatedElementName, Elements);
+	}
+
+	private AnimFrameElement GetAnimFrameElementRecByName(String animatedElementName, List<IDrawable> elements)
+	{
+		for (IDrawable ele : elements) {
+			AnimFrameElement animFrameEle = (AnimFrameElement) ele;
+
+			String name = null;
+			if (animFrameEle.AnimatedElement != null) name = animFrameEle.AnimatedElement.name;
+			if (name == null) name = animFrameEle.AnimatedElementName;
+
+			if (animatedElementName.equals(name)) return animFrameEle;
+
+			AnimFrameElement targetFrEle = GetAnimFrameElementRecByName(animatedElementName, animFrameEle.ChildElements);
+			if (targetFrEle != null) return targetFrEle;
+
+			targetFrEle = GetAnimFrameElementRecByName(animatedElementName, animFrameEle.StepChildElements);
+			if (targetFrEle != null) return targetFrEle;
+		}
+
+		return null;
+	}
 	
 	
 	

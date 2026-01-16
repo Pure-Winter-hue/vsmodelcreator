@@ -72,7 +72,8 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 	JButton prevFrameButton;
 	
 	JTable keyFramesTable;
-	String[] columnNames = {"#", "", "", ""};
+	// Columns: Frame number + keyframe channels
+	String[] columnNames = {"#", "P", "R", "S", "O"};
 	
 	JPanel btnContainerBottom;
 	
@@ -150,6 +151,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 				if (columnIndex == 1) return keyframElem.PositionSet ? "P" : "";
 				if (columnIndex == 2) return keyframElem.RotationSet ? "R" : "";
 				if (columnIndex == 3) return keyframElem.StretchSet ? "S" : "";
+				if (columnIndex == 4) return keyframElem.OriginSet ? "O" : "";
 				
 				return "";
 			}
@@ -166,7 +168,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 			@Override
 			public int getColumnCount()
 			{
-				return 4;
+				return 5;
 			}
 			
 			@Override

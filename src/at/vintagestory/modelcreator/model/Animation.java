@@ -153,7 +153,6 @@ public class Animation
 			if (kelem == null) {
 				kelem = nextkeyframe.GetAnimFrameElementRecByName(forElementName);
 			}
-			AnimFrameElement kelem = nextkeyframe.GetAnimFrameElementRec(forElement);
 			if (kelem != null && kelem.IsSet(forFlag)) {
 				return kelem;
 			}
@@ -200,32 +199,31 @@ public class Animation
 			t = relativeFrame / frames;	
 		}
 		
-		if (forFlag == 0) {
-			kElem.setOffsetX(lerp(t, prev.getOffsetX(), next.getOffsetX()));
-			kElem.setOffsetY(lerp(t, prev.getOffsetY(), next.getOffsetY()));
-			kElem.setOffsetZ(lerp(t, prev.getOffsetZ(), next.getOffsetZ()));		
-			kElem.PositionSet = true;
-		} else if(forFlag == 1) {			
-			kElem.setRotationX(lerp(t, prev.getRotationX(), next.getRotationX()));
-			kElem.setRotationY(lerp(t, prev.getRotationY(), next.getRotationY()));
-			kElem.setRotationZ(lerp(t, prev.getRotationZ(), next.getRotationZ()));
-			kElem.RotationSet = true;
-		} else {
-			kElem.setStretchX(lerp(t, prev.getRotationX(), next.getRotationX()));
-			kElem.setStretchY(lerp(t, prev.getRotationY(), next.getRotationY()));
-			kElem.setStretchZ(lerp(t, prev.getRotationZ(), next.getRotationZ()));
-		} else if (forFlag == 2) {
-			kElem.setStretchX(lerp(t, prev.getStretchX(), next.getStretchX()));
-			kElem.setStretchY(lerp(t, prev.getStretchY(), next.getStretchY()));
-			kElem.setStretchZ(lerp(t, prev.getStretchZ(), next.getStretchZ()));
-			kElem.StretchSet = true;
-		} else {
-			// Origin offsets (pivot). Stored as delta to the element's base rotationOrigin.
-			kElem.setOriginX(lerp(t, prev.getOriginX(), next.getOriginX()));
-			kElem.setOriginY(lerp(t, prev.getOriginY(), next.getOriginY()));
-			kElem.setOriginZ(lerp(t, prev.getOriginZ(), next.getOriginZ()));
-			kElem.OriginSet = true;
-		}
+			if (forFlag == 0) {
+				kElem.setOffsetX(lerp(t, prev.getOffsetX(), next.getOffsetX()));
+				kElem.setOffsetY(lerp(t, prev.getOffsetY(), next.getOffsetY()));
+				kElem.setOffsetZ(lerp(t, prev.getOffsetZ(), next.getOffsetZ()));
+				kElem.PositionSet = true;
+			} else if (forFlag == 1) {
+				kElem.setRotationX(lerp(t, prev.getRotationX(), next.getRotationX()));
+				kElem.setRotationY(lerp(t, prev.getRotationY(), next.getRotationY()));
+				kElem.setRotationZ(lerp(t, prev.getRotationZ(), next.getRotationZ()));
+				kElem.RotationSet = true;
+			} else if (forFlag == 2) {
+				// "Stretch" in the animation format is actually per-axis scaling.
+				// Using rotation values here collapses elements (scale becomes ~0)
+				// and makes interpolation look random. Interpolate the stretch values.
+				kElem.setStretchX(lerp(t, prev.getStretchX(), next.getStretchX()));
+				kElem.setStretchY(lerp(t, prev.getStretchY(), next.getStretchY()));
+				kElem.setStretchZ(lerp(t, prev.getStretchZ(), next.getStretchZ()));
+				kElem.StretchSet = true;
+			} else {
+				// Origin offsets (pivot). Stored as delta to the element's base rotationOrigin.
+				kElem.setOriginX(lerp(t, prev.getOriginX(), next.getOriginX()));
+				kElem.setOriginY(lerp(t, prev.getOriginY(), next.getOriginY()));
+				kElem.setOriginZ(lerp(t, prev.getOriginZ(), next.getOriginZ()));
+				kElem.OriginSet = true;
+			}
 	}
 	
 	
