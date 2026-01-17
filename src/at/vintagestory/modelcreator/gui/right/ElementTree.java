@@ -8,6 +8,7 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.Set;
 
 import javax.swing.DropMode;
 import javax.swing.JTree;
@@ -315,6 +316,51 @@ public class ElementTree
 	
 	
 	
+	/**
+	 * Add the element matching one of the given OpenGL face ids to the current selection.
+	 * Used for Shift + click and Shift + drag marquee selection in the 3D viewport.
+	 */
+	public void addElementSelectionByOpenGLName(int opengglname)
+	{
+		TreePath path = findElementPathByOpenGLName(opengglname);
+		if (path != null) {
+			jtree.addSelectionPath(path);
+			jtree.scrollPathToVisible(path);
+		}
+	}
+
+	/**
+	 * Add all elements whose faces were hit by OpenGL selection in the given name set.
+	 */
+	public void addElementsSelectionByOpenGLNames(Set<Integer> openglNames)
+	{
+		if (openglNames == null || openglNames.isEmpty()) return;
+		for (Integer name : openglNames) {
+			if (name == null) continue;
+			TreePath path = findElementPathByOpenGLName(name);
+			if (path != null) {
+				jtree.addSelectionPath(path);
+			}
+		}
+	}
+
+	private TreePath findElementPathByOpenGLName(int opengglname)
+	{
+		Enumeration<TreeNode> enumer = rootNode.breadthFirstEnumeration();
+		while (enumer.hasMoreElements()) {
+			DefaultMutableTreeNode node = (DefaultMutableTreeNode)enumer.nextElement();
+			if (node.getUserObject() instanceof Element) {
+				Element elem = (Element)node.getUserObject();
+				for (int i = 0; i < elem.getAllFaces().length; i++) {
+					if (elem.getAllFaces()[i].openGlName == opengglname) {
+						return new TreePath(node.getPath());
+					}
+				}
+			}
+		}
+		return null;
+	}
+
     /** Remove the currently selected node. */
     public boolean removeCurrentElement() {
         TreePath currentSelection = jtree.getLeadSelectionPath();

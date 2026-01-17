@@ -398,8 +398,17 @@ public class Element implements IDrawable
 		
 		GL11.glPopMatrix();
 		
+		// Multi-selection support: draw full gizmo for the primary selection,
+		// and a lightweight outline for any additional selected elements.
+		boolean isInMultiSelection = false;
+		if (at.vintagestory.modelcreator.ModelCreator.currentProject != null && at.vintagestory.modelcreator.ModelCreator.currentProject.SelectedElements != null) {
+			isInMultiSelection = at.vintagestory.modelcreator.ModelCreator.currentProject.SelectedElements.contains(this);
+		}
+		
 		if (selectedElem == this) {
 			drawSelectionExtras();
+		} else if (isInMultiSelection) {
+			drawSelectionOutlineOnly();
 		}
 		
 	}
@@ -554,6 +563,79 @@ public class Element implements IDrawable
 		}
 		GL11.glPopMatrix();
 		
+	}
+
+
+	/**
+	 * Lightweight selection marker for non-primary selections.
+	 * Draws only the element outline (no axis gizmo / hovered vertex marker).
+	 */
+	public void drawSelectionOutlineOnly()
+	{
+		// Cube highlight only (copy of the "Cube highlight" part from drawSelectionExtras)
+		GL11.glLineWidth(1f);
+
+		GL11.glPushMatrix();
+		{
+			GL11.glTranslated(originX, originY, originZ);
+			rotateAxis();
+			GL11.glTranslated(-originX, -originY, -originZ);
+			GL11.glTranslated(startX, startY, startZ);
+
+			GL11.glDisable(GL11.GL_DEPTH_TEST);
+			GL11.glBegin(GL11.GL_LINES);
+			{
+				// Match the selected color used in drawSelectionExtras
+				if (ModelCreator.darkMode) {
+					GL11.glColor4f(1f, 1f, 0.5f, 1f);
+				} else {
+					GL11.glColor4f(0F, 0F, 0F, 0.5f);
+				}
+
+				float w = (float)width;
+				float h = (float)height;
+				float d = (float)depth;
+
+				GL11.glVertex3f(0, 0, 0);
+				GL11.glVertex3f(0, h, 0);
+
+				GL11.glVertex3f(w, 0, 0);
+				GL11.glVertex3f(w, h, 0);
+
+				GL11.glVertex3f(w, 0, d);
+				GL11.glVertex3f(w, h, d);
+
+				GL11.glVertex3f(0, 0, d);
+				GL11.glVertex3f(0, h, d);
+
+				GL11.glVertex3f(0, h, 0);
+				GL11.glVertex3f(w, h, 0);
+
+				GL11.glVertex3f(w, h, 0);
+				GL11.glVertex3f(w, h, d);
+
+				GL11.glVertex3f(w, h, d);
+				GL11.glVertex3f(0, h, d);
+
+				GL11.glVertex3f(0, h, d);
+				GL11.glVertex3f(0, h, 0);
+
+				GL11.glVertex3f(0, 0, 0);
+				GL11.glVertex3f(w, 0, 0);
+
+				GL11.glVertex3f(w, 0, 0);
+				GL11.glVertex3f(w, 0, d);
+
+				GL11.glVertex3f(w, 0, d);
+				GL11.glVertex3f(0, 0, d);
+
+				GL11.glVertex3f(0, 0, d);
+				GL11.glVertex3f(0, 0, 0);
+			}
+			GL11.glEnd();
+			GL11.glEnable(GL11.GL_DEPTH_TEST);
+		}
+		GL11.glPopMatrix();
 	}
 
 	@Override
@@ -1411,6 +1493,32 @@ public class Element implements IDrawable
 		
 		ModelCreator.DidModify();
 		updateUV();
+	}
+
+	/**
+	 * Translates the entire UV layout by the given delta <b>without</b> recomputing auto-unwrap.
+	 *
+	 * In Auto-Unwrap mode, {@link #setTexUVStart(double, double)} triggers a full
+	 * re-unwrap. That is desirable when changing unwrap order/dimensions, but when
+	 * the user is simply dragging UV islands around we want a pure translation so
+	 * the UV editor reflects the movement immediately and smoothly.
+	 */
+	public void moveTexUVStartNoRewrap(double du, double dv)
+	{
+		this.texUStart += du;
+		this.texVStart += dv;
+		
+		for (int i = 0; i < 6; i++) {
+			Face f = faces[i];
+			if (!f.isEnabled()) continue;
+			
+			f.textureU += du;
+			f.textureV += dv;
+			f.textureUEnd += du;
+			f.textureVEnd += dv;
+		}
+		
+		ModelCreator.DidModify();
 	}
 	
 	public void moveTexUV(double texU, double texV)

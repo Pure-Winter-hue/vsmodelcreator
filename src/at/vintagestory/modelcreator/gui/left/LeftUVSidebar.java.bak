@@ -17,11 +17,8 @@ import static org.lwjgl.opengl.GL11.glVertex2d;
 import static org.lwjgl.opengl.GL11.glVertex2i;
 
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Objects;
 import java.util.Stack;
 
-import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 import org.newdawn.slick.Color;
@@ -46,58 +43,6 @@ public class LeftUVSidebar extends LeftSidebar
 
 	private int[] startX = { 0, 0, 0, 0, 0, 0 };
 	private int[] startY = { 0, 0, 0, 0, 0, 0 };
-
-	private static class UvSelection {
-		final Element elem;
-		final int faceIndex;
-		final String textureCode;
-
-		UvSelection(Element elem, int faceIndex, String textureCode) {
-			this.elem = elem;
-			this.faceIndex = faceIndex;
-			this.textureCode = textureCode;
-		}
-
-		@Override
-		public boolean equals(Object o) {
-			if (this == o) return true;
-			if (!(o instanceof UvSelection)) return false;
-			UvSelection other = (UvSelection)o;
-			return elem == other.elem && faceIndex == other.faceIndex && Objects.equals(textureCode, other.textureCode);
-		}
-
-		@Override
-		public int hashCode() {
-			return Objects.hash(System.identityHashCode(elem), faceIndex, textureCode);
-		}
-	}
-
-	// Multi-select state
-	private final HashSet<UvSelection> selectedUvs = new HashSet<>();
-	private final boolean[] selectedBlockFaces = new boolean[] { false, false, false, false, false, false };
-
-	// UV editor tools
-	private enum UvTool { SELECT, MOVE }
-	private UvTool uvTool = UvTool.SELECT;
-
-	// Marquee selection behavior
-	private boolean marqueeAdditive = false;
-
-	// Simple tool buttons (top-right)
-	private static final int TOOLBTN_W = 44;
-	private static final int TOOLBTN_H = 18;
-	private static final int TOOLBTN_Y = 6;
-	private static final int TOOLBTN_PAD = 6;
-
-	// Shift + drag marquee selection
-	private boolean marqueeActive = false;
-	private boolean marqueeInEntityMode = false;
-	private String marqueeTextureCode = null;
-	private int marqueeStartX, marqueeStartY;
-	private int marqueeCurX, marqueeCurY;
-	private int marqueeBoxW, marqueeBoxH;
-	private int marqueeStartMouseXRaw, marqueeStartMouseYRaw;
-	private int marqueeCurMouseXRaw, marqueeCurMouseYRaw;
 	
 	
 	private int texBoxWidth, texBoxHeight;
@@ -138,7 +83,6 @@ public class LeftUVSidebar extends LeftSidebar
 
 		this.canvasHeight = canvasHeight;
 
-		drawToolButtons();
 
 		if (ModelCreator.transparent) {
 			GL11.glEnable(GL11.GL_BLEND);
@@ -179,248 +123,8 @@ public class LeftUVSidebar extends LeftSidebar
 		
 		return codes;
 	}
-
-	private boolean isShiftDown() {
-		return Keyboard.isKeyDown(Keyboard.KEY_LSHIFT) || Keyboard.isKeyDown(Keyboard.KEY_RSHIFT);
-	}
-
-	private void clearBlockFaceSelection() {
-		for (int i = 0; i < selectedBlockFaces.length; i++) selectedBlockFaces[i] = false;
-	}
-
-	private void setSingleBlockFaceSelection(int faceIndex) {
-		clearBlockFaceSelection();
-		if (faceIndex >= 0 && faceIndex < selectedBlockFaces.length) selectedBlockFaces[faceIndex] = true;
-	}
-
-	private void setSingleEntityUvSelection(Element elem, int faceIndex, String textureCode) {
-		selectedUvs.clear();
-		if (elem != null && faceIndex >= 0) {
-			selectedUvs.add(new UvSelection(elem, faceIndex, textureCode));
-		}
-	}
-
-	private boolean isEntityUvSelected(Element elem, int faceIndex, String textureCode) {
-		return selectedUvs.contains(new UvSelection(elem, faceIndex, textureCode));
-	}
-
-	private static class TexArea {
-		final String textureCode;
-		final int localX;
-		final int localY;
-		final int boxW;
-		final int boxH;
-		TexArea(String textureCode, int localX, int localY, int boxW, int boxH) {
-			this.textureCode = textureCode;
-			this.localX = localX;
-			this.localY = localY;
-			this.boxW = boxW;
-			this.boxH = boxH;
-		}
-	}
-
-	private int[] calcEntityTexBoxSize(String textureCode) {
-		double texWidth = ModelCreator.currentProject.TextureWidth;
-		double texHeight = ModelCreator.currentProject.TextureHeight;
-		if (textureCode != null) {
-			int[] size = ModelCreator.currentProject.TextureSizes.get(textureCode);
-			if (size != null) {
-				texWidth = size[0];
-				texHeight = size[1];
-			}
-		}
-		TextureEntry texEntry = textureCode == null ? null : ModelCreator.currentProject.TexturesByCode.get(textureCode);
-		Sized scale = Face.getVoxel2PixelScale(ModelCreator.currentProject, texEntry);
-		texWidth *= scale.W / 2;
-		texHeight *= scale.H / 2;
-		int boxW = (int)Math.max(0, (GetSidebarWidth() - 20));
-		int boxH = (int)(boxW * texHeight / texWidth);
-		return new int[] { boxW, boxH };
-	}
-
-	private ArrayList<String> getTextureCodesOrNull() {
-		ArrayList<String> codes = getTextureCodes();
-		if (codes.size() == 0) codes.add(null);
-		return codes;
-	}
-
-	private TexArea getTexAreaAtMouse() {
-		int mouseX = Mouse.getX() - 10;
-		int mouseY = (canvasHeight - Mouse.getY()) - 30;
-		if (mouseX < 0) return null;
-
-		for (String textureCode : getTextureCodesOrNull()) {
-			int[] wh = calcEntityTexBoxSize(textureCode);
-			int boxW = wh[0];
-			int boxH = wh[1];
-			if (boxW <= 0 || boxH <= 0) return null;
-			if (mouseY >= 0 && mouseY < boxH) {
-				return new TexArea(textureCode, Clamp(mouseX, 0, boxW), Clamp(mouseY, 0, boxH), boxW, boxH);
-			}
-			mouseY -= boxH + 20;
-		}
-		return null;
-	}
-
-	private TexArea getMouseLocalInTexture(String targetTextureCode, int fallbackBoxW, int fallbackBoxH) {
-		int mouseX = Mouse.getX() - 10;
-		int mouseY = (canvasHeight - Mouse.getY()) - 30;
-		if (mouseX < 0) return null;
-
-		for (String textureCode : getTextureCodesOrNull()) {
-			int[] wh = calcEntityTexBoxSize(textureCode);
-			int boxW = wh[0];
-			int boxH = wh[1];
-			if (Objects.equals(textureCode, targetTextureCode)) {
-				return new TexArea(textureCode, Clamp(mouseX, 0, boxW), Clamp(mouseY, 0, boxH), boxW, boxH);
-			}
-			mouseY -= boxH + 20;
-		}
-		// If we can't resolve it anymore (e.g. textures list changed), clamp to last known size
-		return new TexArea(targetTextureCode, Clamp(mouseX, 0, fallbackBoxW), Clamp(mouseY, 0, fallbackBoxH), fallbackBoxW, fallbackBoxH);
-	}
-
-	private void collectEntitySelectionsInRect(String textureCode, int rx1, int ry1, int rx2, int ry2, ArrayList<Element> elems, int boxW, int boxH, HashSet<UvSelection> out) {
-		for (Element elem : elems) {
-			if (!elem.getRenderInEditor()) continue;
-			Face[] faces = elem.getAllFaces();
-			for (int i = 0; i < 6; i++) {
-				Face face = faces[i];
-				if (face == null || !face.isEnabled()) continue;
-				if (textureCode != null && !textureCode.equals(face.getTextureCode())) continue;
-
-				Sized uv = face.translateVoxelPosToUvPos(face.getStartU(), face.getStartV(), true);
-				Sized uvend = face.translateVoxelPosToUvPos(face.getEndU(), face.getEndV(), true);
-				int fx1 = (int)Math.round(uv.W * boxW);
-				int fy1 = (int)Math.round(uv.H * boxH);
-				int fx2 = (int)Math.round(uvend.W * boxW);
-				int fy2 = (int)Math.round(uvend.H * boxH);
-
-				boolean intersects = fx1 <= rx2 && fx2 >= rx1 && fy1 <= ry2 && fy2 >= ry1;
-				if (intersects) {
-					out.add(new UvSelection(elem, i, face.getTextureCode()));
-				}
-			}
-			collectEntitySelectionsInRect(textureCode, rx1, ry1, rx2, ry2, elem.ChildElements, boxW, boxH, out);
-		}
-	}
-
-	private UvSelection findEntityUvAt(String textureCode, double mouseU, double mouseV, ArrayList<Element> elems) {
-		for (Element elem : elems) {
-			if (!elem.getRenderInEditor()) continue;
-			Face[] faces = elem.getAllFaces();
-			for (int i = 0; i < 6; i++) {
-				Face face = faces[i];
-				if (face == null || !face.isEnabled()) continue;
-				if (textureCode != null && !textureCode.equals(face.getTextureCode())) continue;
-				Sized uv = face.translateVoxelPosToUvPos(face.getStartU(), face.getStartV(), true);
-				Sized uvend = face.translateVoxelPosToUvPos(face.getEndU(), face.getEndV(), true);
-				if (mouseU >= uv.W && mouseV >= uv.H && mouseU <= uvend.W && mouseV <= uvend.H) {
-					return new UvSelection(elem, i, face.getTextureCode());
-				}
-			}
-			UvSelection found = findEntityUvAt(textureCode, mouseU, mouseV, elem.ChildElements);
-			if (found != null) return found;
-		}
-		return null;
-	}
-
-	private void finalizeMarqueeSelection() {
-		if (!marqueeActive) return;
-
-		if (marqueeInEntityMode) {
-			if (marqueeBoxW <= 0 || marqueeBoxH <= 0) return;
-			int x1 = Math.min(marqueeStartX, marqueeCurX);
-			int y1 = Math.min(marqueeStartY, marqueeCurY);
-			int x2 = Math.max(marqueeStartX, marqueeCurX);
-			int y2 = Math.max(marqueeStartY, marqueeCurY);
-			int w = x2 - x1;
-			int h = y2 - y1;
-
-			// Tiny drag counts as click
-			if (w < 3 && h < 3) {
-				double mouseU = (double)marqueeStartX / marqueeBoxW;
-				double mouseV = (double)marqueeStartY / marqueeBoxH;
-				UvSelection hit = findEntityUvAt(marqueeTextureCode, mouseU, mouseV, ModelCreator.currentProject.rootElements);
-
-				if (!marqueeAdditive) {
-					selectedUvs.clear();
-				}
-
-				if (hit != null) {
-					if (marqueeAdditive) {
-						if (selectedUvs.contains(hit)) selectedUvs.remove(hit);
-						else selectedUvs.add(hit);
-					} else {
-						selectedUvs.add(hit);
-					}
-					ModelCreator.currentProject.selectElement(hit.elem);
-					hit.elem.setSelectedFace(hit.faceIndex);
-				}
-				return;
-			}
-
-			HashSet<UvSelection> found = new HashSet<>();
-			collectEntitySelectionsInRect(marqueeTextureCode, x1, y1, x2, y2, ModelCreator.currentProject.rootElements, marqueeBoxW, marqueeBoxH, found);
-			if (!marqueeAdditive) {
-				selectedUvs.clear();
-			}
-			if (!found.isEmpty()) {
-				selectedUvs.addAll(found);
-				UvSelection lead = found.iterator().next();
-				ModelCreator.currentProject.selectElement(lead.elem);
-				lead.elem.setSelectedFace(lead.faceIndex);
-			}
-			return;
-		}
-
-		// Block texture mode: select face boxes on the left
-		Element elem = manager.getCurrentElement();
-		if (elem == null) return;
-		int x1 = Math.min(marqueeStartX, marqueeCurX);
-		int y1 = Math.min(marqueeStartY, marqueeCurY);
-		int x2 = Math.max(marqueeStartX, marqueeCurX);
-		int y2 = Math.max(marqueeStartY, marqueeCurY);
-		int w = x2 - x1;
-		int h = y2 - y1;
-
-		if (w < 3 && h < 3) {
-			int faceIdx = getGrabbedFace(elem, canvasHeight, marqueeStartMouseXRaw, marqueeStartMouseYRaw);
-			if (!marqueeAdditive) {
-				for (int i = 0; i < 6; i++) selectedBlockFaces[i] = false;
-			}
-			if (faceIdx >= 0) {
-				if (marqueeAdditive) {
-					selectedBlockFaces[faceIdx] = !selectedBlockFaces[faceIdx];
-				} else {
-					selectedBlockFaces[faceIdx] = true;
-				}
-				if (selectedBlockFaces[faceIdx]) {
-					elem.setSelectedFace(faceIdx);
-				}
-			}
-			return;
-		}
-
-		if (!marqueeAdditive) {
-			for (int i = 0; i < 6; i++) selectedBlockFaces[i] = false;
-		}
-
-		for (int i = 0; i < 6; i++) {
-			Face face = elem.getAllFaces()[i];
-			if (face == null || !face.isEnabled()) continue;
-			int bx1 = startX[i];
-			int by1 = startY[i];
-			int bx2 = startX[i] + blockFaceTextureMaxWidth;
-			int by2 = startY[i] + blockFaceTextureSize;
-			boolean intersects = bx1 <= x2 && bx2 >= x1 && by1 <= y2 && by2 >= y1;
-			if (intersects) {
-				selectedBlockFaces[i] = true;
-				elem.setSelectedFace(i);
-			}
-		}
-	}
-
+	
+	
 	void drawRectsEntityTextureMode(int canvasHeight) {
 		
 		if (!Mouse.isButtonDown(0) && !Mouse.isButtonDown(1)) {
@@ -541,46 +245,7 @@ public class LeftUVSidebar extends LeftSidebar
 					drawFace(rft.elem, rft.face);
 				}
 
-				
-					// Marquee selection overlay
-					if (marqueeActive && marqueeInEntityMode && Objects.equals(marqueeTextureCode, textureCode)) {
-						TextureImpl.bindNone();
-						GL11.glEnable(GL11.GL_BLEND);
-						glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-						int x1 = Math.min(marqueeStartX, marqueeCurX);
-						int y1 = Math.min(marqueeStartY, marqueeCurY);
-						int x2 = Math.max(marqueeStartX, marqueeCurX);
-						int y2 = Math.max(marqueeStartY, marqueeCurY);
-
-						GL11.glColor4f(1f, 1f, 0f, 0.15f);
-						glBegin(GL_QUADS);
-						{
-							glVertex2d(x1, y2);
-							glVertex2d(x2, y2);
-							glVertex2d(x2, y1);
-							glVertex2d(x1, y1);
-						}
-						glEnd();
-
-						GL11.glColor4f(1f, 1f, 0f, 0.9f);
-						glBegin(GL_LINES);
-						{
-							glVertex2d(x1, y1);
-							glVertex2d(x1, y2);
-
-							glVertex2d(x1, y2);
-							glVertex2d(x2, y2);
-
-							glVertex2d(x2, y2);
-							glVertex2d(x2, y1);
-
-							glVertex2d(x2, y1);
-							glVertex2d(x1, y1);
-						}
-						glEnd();
-					}
-					glPopMatrix();
+				glPopMatrix();
 			}
 		}
 		
@@ -704,29 +369,8 @@ public class LeftUVSidebar extends LeftSidebar
 		}
 		
 		glEnd();
+		
 
-		// Marquee multi-selection highlight
-		if (isEntityUvSelected(elem, sidei, face.getTextureCode())) {
-			TextureImpl.bindNone();
-			glLineWidth(2F);
-			GL11.glColor4f(1f, 1f, 0f, 1f);
-			glBegin(GL_LINES);
-			{
-				glVertex2d(uv.W * texBoxWidth, uv.H * texBoxHeight);
-				glVertex2d(uv.W * texBoxWidth, uvend.H * texBoxHeight);
-
-				glVertex2d(uv.W * texBoxWidth, uvend.H * texBoxHeight);
-				glVertex2d(uvend.W * texBoxWidth, uvend.H * texBoxHeight);
-
-				glVertex2d(uvend.W * texBoxWidth, uvend.H * texBoxHeight);
-				glVertex2d(uvend.W * texBoxWidth, uv.H * texBoxHeight);
-
-				glVertex2d(uvend.W * texBoxWidth, uv.H * texBoxHeight);
-				glVertex2d(uv.W * texBoxWidth, uv.H * texBoxHeight);
-			}
-			glEnd();
-			glLineWidth(1F);
-		}
 
 		boolean renderName = (ModelCreator.uvShowNames && (!elem.isAutoUnwrapEnabled() || (elem.getUnwrapMode() <= 0 && sidei ==0) || sidei == elem.getUnwrapMode() - 1));
 		
@@ -745,84 +389,8 @@ public class LeftUVSidebar extends LeftSidebar
 			TextureImpl.bindNone();
 		}
 	}
-
-	private int getMoveBtnX() {
-		int w = GetSidebarWidth();
-		return w - 10 - TOOLBTN_W;
-	}
-
-	private int getSelectBtnX() {
-		return getMoveBtnX() - TOOLBTN_PAD - TOOLBTN_W;
-	}
-
-	private void drawToolButtons() {
-		int selectX = getSelectBtnX();
-		int moveX = getMoveBtnX();
-
-		GL11.glEnable(GL11.GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-		drawToolButton(selectX, TOOLBTN_Y, "SEL", uvTool == UvTool.SELECT);
-		drawToolButton(moveX, TOOLBTN_Y, "MOVE", uvTool == UvTool.MOVE);
-
-		GL11.glDisable(GL11.GL_BLEND);
-	}
-
-	private void drawToolButton(int x, int y, String label, boolean active) {
-		TextureImpl.bindNone();
-		if (active) GL11.glColor4f(0.25f, 0.35f, 0.85f, 0.9f);
-		else GL11.glColor4f(0f, 0f, 0f, 0.25f);
-
-		glBegin(GL_QUADS);
-		{
-			glVertex2i(x, y + TOOLBTN_H);
-			glVertex2i(x + TOOLBTN_W, y + TOOLBTN_H);
-			glVertex2i(x + TOOLBTN_W, y);
-			glVertex2i(x, y);
-		}
-		glEnd();
-
-		GL11.glColor4f(0.8f, 0.8f, 0.9f, 0.9f);
-		glBegin(GL_LINES);
-		{
-			glVertex2i(x, y);
-			glVertex2i(x, y + TOOLBTN_H);
-
-			glVertex2i(x, y + TOOLBTN_H);
-			glVertex2i(x + TOOLBTN_W, y + TOOLBTN_H);
-
-			glVertex2i(x + TOOLBTN_W, y + TOOLBTN_H);
-			glVertex2i(x + TOOLBTN_W, y);
-
-			glVertex2i(x + TOOLBTN_W, y);
-			glVertex2i(x, y);
-		}
-		glEnd();
-
-		EnumFonts.BEBAS_NEUE_12.drawString(x + 6, y + 4, label, new Color(0.9F, 0.9F, 1F, 1F));
-		TextureImpl.bindNone();
-	}
-
-	private boolean handleToolButtonClick() {
-		int mx = Mouse.getX();
-		int my = canvasHeight - Mouse.getY() + 10;
-		if (my < TOOLBTN_Y || my > TOOLBTN_Y + TOOLBTN_H) return false;
-
-		int selectX = getSelectBtnX();
-		int moveX = getMoveBtnX();
-
-		if (mx >= selectX && mx <= selectX + TOOLBTN_W) {
-			uvTool = UvTool.SELECT;
-			return true;
-		}
-		if (mx >= moveX && mx <= moveX + TOOLBTN_W) {
-			uvTool = UvTool.MOVE;
-			return true;
-		}
-		return false;
-	}
-
-
+	
+	
 	int blockFaceTextureSize;
 	int blockFaceTextureMaxWidth;
 
@@ -1022,10 +590,6 @@ public class LeftUVSidebar extends LeftSidebar
 					
 					glColor3f(1, 1, 1);
 					
-					if (selectedBlockFaces[i]) {
-						glColor3f(1f, 1f, 0f);
-					}
-					
 					if (grabbedFaceIndex == i) {
 						glColor3f(0f, 1f, 0.75f);
 					}
@@ -1052,50 +616,11 @@ public class LeftUVSidebar extends LeftSidebar
 			}
 		}
 		glPopMatrix();
-
-		// Marquee selection overlay (block texture mode)
-		if (marqueeActive && !marqueeInEntityMode) {
-			TextureImpl.bindNone();
-			GL11.glEnable(GL11.GL_BLEND);
-			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-			int x1 = Math.min(marqueeStartX, marqueeCurX);
-			int y1 = Math.min(marqueeStartY, marqueeCurY);
-			int x2 = Math.max(marqueeStartX, marqueeCurX);
-			int y2 = Math.max(marqueeStartY, marqueeCurY);
-
-			GL11.glColor4f(1f, 1f, 0f, 0.15f);
-			glBegin(GL_QUADS);
-			{
-				glVertex2d(x1, y2);
-				glVertex2d(x2, y2);
-				glVertex2d(x2, y1);
-				glVertex2d(x1, y1);
-			}
-			glEnd();
-
-			GL11.glColor4f(1f, 1f, 0f, 0.9f);
-			glBegin(GL_LINES);
-			{
-				glVertex2d(x1, y1);
-				glVertex2d(x1, y2);
-
-				glVertex2d(x1, y2);
-				glVertex2d(x2, y2);
-
-				glVertex2d(x2, y2);
-				glVertex2d(x2, y1);
-
-				glVertex2d(x2, y1);
-				glVertex2d(x1, y1);
-			}
-			glEnd();
-		}
 	}
+	
+	
 
-	// Track the last mouse position with sub-pixel precision so UV dragging can be smooth even
-	// when the texture preview is heavily scaled (e.g. 16x16 shown large).
-	private double lastMouseX, lastMouseY;
+	private int lastMouseX, lastMouseY;
 	private boolean grabbing = false;
 	Element grabbedElement;
 	int grabbedFaceIndex = -1;
@@ -1104,11 +629,6 @@ public class LeftUVSidebar extends LeftSidebar
 	public void mouseUp() {
 		super.mouseUp();
 		
-		if (marqueeActive) {
-			finalizeMarqueeSelection();
-			marqueeActive = false;
-		}
-
 		if (grabbing) {
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 		}
@@ -1118,309 +638,163 @@ public class LeftUVSidebar extends LeftSidebar
 	@Override
 	public void onMouseDownOnPanel()
 	{
-		boolean lmbDown = Mouse.isButtonDown(0);
-		boolean rmbDown = Mouse.isButtonDown(1);
-		boolean anyDown = lmbDown || rmbDown;
-
-		if (!grabbing && !ModelCreator.currentProject.EntityTextureMode && anyDown) {
+		boolean nowGrabbing = Mouse.isButtonDown(0) || Mouse.isButtonDown(1);
+		
+		if (!grabbing && !ModelCreator.currentProject.EntityTextureMode && nowGrabbing) {
 			int width = GetSidebarWidth();
 			int nowMouseX = Mouse.getX();
+			
 			if (Math.abs(nowMouseX - width) < 4) {
 				grabbedElement = null;
 			}
 		}
-
+		
 		if (grabbedElement == null) {
 			super.onMouseDownOnPanel();
 		}
-
+		
 		if (nowResizingSidebar) return;
-
-		// Tool buttons (top-right)
-		if (!marqueeActive && !grabbing && lmbDown && handleToolButtonClick()) {
-			return;
-		}
-
-		// Marquee selection (Select tool, or Shift-drag while in Move tool)
-		if (!marqueeActive && !grabbing && lmbDown && !rmbDown && (uvTool == UvTool.SELECT || isShiftDown())) {
-			marqueeStartMouseXRaw = Mouse.getX();
-			marqueeStartMouseYRaw = Mouse.getY();
-			marqueeCurMouseXRaw = marqueeStartMouseXRaw;
-			marqueeCurMouseYRaw = marqueeStartMouseYRaw;
-			marqueeAdditive = isShiftDown();
-
-			if (ModelCreator.currentProject.EntityTextureMode) {
-				TexArea area = getTexAreaAtMouse();
-				if (area != null) {
-					marqueeActive = true;
-					marqueeInEntityMode = true;
-					marqueeTextureCode = area.textureCode;
-					marqueeBoxW = area.boxW;
-					marqueeBoxH = area.boxH;
-					marqueeStartX = area.localX;
-					marqueeStartY = area.localY;
-					marqueeCurX = area.localX;
-					marqueeCurY = area.localY;
-				}
-			} else {
-				marqueeActive = true;
-				marqueeInEntityMode = false;
-				marqueeTextureCode = null;
-				marqueeBoxW = 0;
-				marqueeBoxH = 0;
-				marqueeStartX = marqueeStartMouseXRaw;
-				marqueeStartY = canvasHeight - marqueeStartMouseYRaw + 10;
-				marqueeCurX = marqueeStartX;
-				marqueeCurY = marqueeStartY;
-			}
-
-			if (marqueeActive) {
-				return;
-			}
-		}
-
-		if (marqueeActive) {
-			marqueeCurMouseXRaw = Mouse.getX();
-			marqueeCurMouseYRaw = Mouse.getY();
-			if (marqueeInEntityMode) {
-				TexArea area = getMouseLocalInTexture(marqueeTextureCode, marqueeBoxW, marqueeBoxH);
-				if (area != null) {
-					marqueeCurX = area.localX;
-					marqueeCurY = area.localY;
-					marqueeBoxW = area.boxW;
-					marqueeBoxH = area.boxH;
-				}
-			} else {
-				marqueeCurX = marqueeCurMouseXRaw;
-				marqueeCurY = canvasHeight - marqueeCurMouseYRaw + 10;
-			}
-			return;
-		}
-
-		// Only drag-edit in Move tool (LMB) or with RMB (resize)
-		boolean nowGrabbing = rmbDown || (uvTool == UvTool.MOVE && lmbDown && !isShiftDown());
-
+		
+		
+		
 		if (ModelCreator.currentProject.EntityTextureMode && !nowGrabbing) {
 			grabbedElement = currentHoveredElementEntityTextureMode(ModelCreator.currentProject.rootElements);
 		}
-
+		
 		if (!ModelCreator.currentProject.EntityTextureMode && !nowGrabbing) {
 			grabbedElement = ModelCreator.currentProject.SelectedElement;
 		}
-
+		
+		
+		
 		if (!grabbing && nowGrabbing) {
 			if (ModelCreator.currentProject.EntityTextureMode) {
 				grabbedElement = currentHoveredElementEntityTextureMode(ModelCreator.currentProject.rootElements);
-			} else {
+			}
+			else {
 				grabbedElement = ModelCreator.currentProject.SelectedElement;
 			}
-
+			
 			if (grabbedElement == null) return;
-
+			
 			this.lastMouseX = Mouse.getX();
 			this.lastMouseY = Mouse.getY();
-
+			
 			if (!ModelCreator.currentProject.EntityTextureMode) {
-				grabbedFaceIndex = getGrabbedFace(grabbedElement, canvasHeight, (int)lastMouseX, (int)lastMouseY);
+				grabbedFaceIndex = getGrabbedFace(grabbedElement, canvasHeight, lastMouseX, lastMouseY);	
 			}
 
+			
 			if (grabbedElement.getSelectedFaceIndex() != grabbedFaceIndex) {
 				grabbedElement.setSelectedFace(grabbedFaceIndex);
 			}
-
-			// In Move tool: clicking an unselected UV should select it (single) before moving
-			if (uvTool == UvTool.MOVE && lmbDown && !isShiftDown()) {
-				if (ModelCreator.currentProject.EntityTextureMode) {
-					Face f = (grabbedFaceIndex >= 0) ? grabbedElement.getAllFaces()[grabbedFaceIndex] : null;
-					if (f != null && !isEntityUvSelected(grabbedElement, grabbedFaceIndex, f.getTextureCode())) {
-						setSingleEntityUvSelection(grabbedElement, grabbedFaceIndex, f.getTextureCode());
-					}
-				} else {
-					if (grabbedFaceIndex >= 0 && !selectedBlockFaces[grabbedFaceIndex]) {
-						setSingleBlockFaceSelection(grabbedFaceIndex);
-					}
-				}
-			}
-
-			ModelCreator.currentProject.selectElement(grabbedElement);
+			ModelCreator.currentProject.selectElement(grabbedElement);	
 		}
-
+		
 		grabbing = nowGrabbing;
 		if (grabbedElement == null) return;
-
+		
+		
 		if (grabbing)
 		{
 			ModelCreator.changeHistory.beginMultichangeHistoryState();
-
+			
 			int newMouseX = Mouse.getX();
-			int newMouseY = Mouse.getY();
+			int newMouseY = Mouse.getY();			
 			int xMovement = 0;
 			int yMovement = 0;
 			TextureEntry texEntry = null;
-
-			boolean doMove = (uvTool == UvTool.MOVE) && Mouse.isButtonDown(0) && !isShiftDown();
-			boolean doResize = Mouse.isButtonDown(1);
-
+			
 			if (grabbedFaceIndex >= 0) {
 				texEntry = grabbedElement.getAllFaces()[grabbedFaceIndex].getTextureEntry();
 			}
-
+			
 			if (!ModelCreator.currentProject.EntityTextureMode && grabbedFaceIndex >= 0) {
 				Sized texSize = GetBlockTextureModeTextureSize(texEntry == null ? null : texEntry.code, blockFaceTextureSize);
 				texBoxWidth = (int)texSize.W;
 				texBoxHeight = (int)texSize.H;
 			}
-
+			
 			Sized scale = Face.getVoxel2PixelScale(ModelCreator.currentProject, texEntry);
+			
 
-			double mousedx = (newMouseX - this.lastMouseX);
-			double mousedy = (newMouseY - this.lastMouseY);
-
+			float mousedx = (newMouseX - this.lastMouseX);
+			float mousedy = (newMouseY - this.lastMouseY);
+			
 			int pixelsW = (int)(ModelCreator.currentProject.TextureWidth * scale.W);
 			int pixelsH = (int)(ModelCreator.currentProject.TextureHeight * scale.H);
-
-			if (texEntry != null) {
+			
+			if (texEntry != null) {			
 				int[] size = ModelCreator.currentProject.TextureSizes.get(texEntry.code);
 				if (size != null) {
 					pixelsW = (int)(size[0] * scale.W);
 					pixelsH = (int)(size[1] * scale.H);
 				}
 			}
-
+			
 			double sectionWidth = (double)texBoxWidth / pixelsW;
 			double sectionHeight = (double)texBoxHeight / pixelsH;
+			
+			xMovement = (int)(mousedx / sectionWidth);
+			yMovement = (int)(mousedy / sectionHeight);
 
-			double xMoveF = mousedx / sectionWidth;
-			double yMoveF = mousedy / sectionHeight;
-
-			// Keep integer movements for RMB resize (pixel-accurate), but allow smooth fractional
-			// movements for LMB drag in the Move tool.
-			xMovement = (int)(xMoveF);
-			yMovement = (int)(yMoveF);
-
-			float du = (float)(xMoveF / scale.W);
-			float dv = (float)(-yMoveF / scale.H);
-
+			
 			if (ModelCreator.currentProject.EntityTextureMode) {
-				if ((mousedx != 0 || mousedy != 0) && grabbedElement != null && doMove)
+				if ((xMovement != 0 || yMovement != 0) && grabbedElement != null && Mouse.isButtonDown(0))
 				{
-					Face face = null;
-					if (grabbedFaceIndex >= 0) face = grabbedElement.getAllFaces()[grabbedFaceIndex];
-
-					boolean moveGroup = false;
-					if (face != null) {
-						moveGroup = isEntityUvSelected(grabbedElement, grabbedFaceIndex, face.getTextureCode()) && selectedUvs.size() > 1;
-					}
-
-					if (moveGroup) {
-						HashSet<Element> movedElems = new HashSet<Element>();
-						for (UvSelection sel : selectedUvs) {
-							Element e = sel.elem;
-							if (e == null) continue;
-							Face sf = (sel.faceIndex >= 0 && sel.faceIndex < 6) ? e.getAllFaces()[sel.faceIndex] : null;
-							if (sf != null && !e.isAutoUnwrapEnabled()) {
-								sf.moveTextureU(du);
-								sf.moveTextureV(dv);
-							} else {
-								if (movedElems.add(e)) {
-									e.moveTexUVStartNoRewrap(du, dv);
-								}
-							}
-						}
+					Face face = null; 
+					if (grabbedFaceIndex >=0) face = grabbedElement.getAllFaces()[grabbedFaceIndex];
+					if (face != null && !grabbedElement.isAutoUnwrapEnabled()) {
+						
+						face.moveTextureU(xMovement / scale.W);
+						face.moveTextureV(-yMovement / scale.H);
+						
 					} else {
-						if (face != null && !grabbedElement.isAutoUnwrapEnabled()) {
-							face.moveTextureU(du);
-							face.moveTextureV(dv);
-						} else {
-							grabbedElement.moveTexUVStartNoRewrap(du, dv);
-						}
+						grabbedElement.setTexUVStart(grabbedElement.getTexUStart() + xMovement / scale.W, grabbedElement.getTexVStart() - yMovement / scale.H);	
 					}
 				}
 			} else {
+
 				if (grabbedFaceIndex == -1) return;
-
-				// Move/resize one or many selected faces
-				int selectedCount = 0;
-				for (int i = 0; i < 6; i++) if (selectedBlockFaces[i]) selectedCount++;
-				boolean moveGroup = selectedCount > 1 && selectedBlockFaces[grabbedFaceIndex];
-
-				if (doMove)
+				Face face = grabbedElement.getAllFaces()[grabbedFaceIndex];
+				
+				
+				if (Mouse.isButtonDown(0))
 				{
-					if (moveGroup) {
-						for (int i = 0; i < 6; i++) {
-							if (!selectedBlockFaces[i]) continue;
-							Face f = grabbedElement.getAllFaces()[i];
-							if (f == null || !f.isEnabled()) continue;
-							f.moveTextureU(du);
-							f.moveTextureV(dv);
-							f.updateUV();
-						}
-					} else {
-						Face face = grabbedElement.getAllFaces()[grabbedFaceIndex];
-						if (face != null) {
-							face.moveTextureU(du);
-							face.moveTextureV(dv);
-							face.updateUV();
-						}
-					}
+					face.moveTextureU(xMovement / scale.W);
+					face.moveTextureV(-yMovement / scale.H);
 				}
-				else if (doResize)
+				else
 				{
-					if (moveGroup) {
-						for (int i = 0; i < 6; i++) {
-							if (!selectedBlockFaces[i]) continue;
-							Face f = grabbedElement.getAllFaces()[i];
-							if (f == null || !f.isEnabled()) continue;
-							f.setAutoUVEnabled(false);
+					face.setAutoUVEnabled(false);
 
-							f.addTextureUEnd(xMovement / scale.W);
-							f.addTextureVEnd(-yMovement / scale.H);
+					face.addTextureUEnd(xMovement / scale.W);
+					face.addTextureVEnd(-yMovement / scale.H);
 
-							f.setAutoUVEnabled(false);
-							f.updateUV();
-						}
-					} else {
-						Face face = grabbedElement.getAllFaces()[grabbedFaceIndex];
-						if (face != null) {
-							face.setAutoUVEnabled(false);
-
-							face.addTextureUEnd(xMovement / scale.W);
-							face.addTextureVEnd(-yMovement / scale.H);
-
-							face.setAutoUVEnabled(false);
-							face.updateUV();
-						}
-					}
+					face.setAutoUVEnabled(false);
 				}
-				else {
-					return;
-				}
+				
+				face.updateUV();
 			}
 
-			if (doMove) {
-				// Move tool: keep the mouse lockstep with the UVs, including fractional movement.
-				this.lastMouseX = newMouseX;
-				this.lastMouseY = newMouseY;
-				if (mousedx != 0 || mousedy != 0) {
-					ModelCreator.updateValues(null);
-				}
-			} else {
-				// Resize tool (RMB): keep pixel-accurate snapping like before.
-				if (xMovement != 0) {
-					this.lastMouseX += xMovement * sectionWidth;   // Add *sectionWidth because otherwise the rect moves too quickly
-				}
-
-				if (yMovement != 0) {
-					this.lastMouseY += yMovement * sectionHeight;
-				}
-
-				if (xMovement != 0 || yMovement != 0) {
-					ModelCreator.updateValues(null);
-				}
+			
+			if (xMovement != 0) {
+				this.lastMouseX += xMovement * sectionWidth;   // Add *sectionWidth because otherwise the rect moves too quickly
 			}
+			
+			if (yMovement != 0) {
+				this.lastMouseY += yMovement * sectionHeight;
+			}
+			
+			if (xMovement != 0 || yMovement != 0) {
+				ModelCreator.updateValues(null);	
+			}
+			
 		}
 	}
-
+	
+	
+	
 	public Sized GetBlockTextureModeTextureSize(String textureCode, float maxHeight) {
 		double texWidth = ModelCreator.currentProject.TextureWidth;
 		double texHeight = ModelCreator.currentProject.TextureHeight;

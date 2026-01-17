@@ -33,6 +33,19 @@ public class ModelRenderer
 	public boolean renderDropTagets = false;
 	public Point dropLocation;
 
+	// Viewport marquee selection (Shift + drag in 3D viewport)
+	public boolean viewportMarqueeActive = false;
+	public int viewportMarqueeX1, viewportMarqueeY1, viewportMarqueeX2, viewportMarqueeY2;
+
+	public void setViewportMarquee(boolean active, int x1, int y1, int x2, int y2) {
+		this.viewportMarqueeActive = active;
+		this.viewportMarqueeX1 = x1;
+		this.viewportMarqueeY1 = y1;
+		this.viewportMarqueeX2 = x2;
+		this.viewportMarqueeY2 = y2;
+	}
+
+
 	public ModelRenderer(IElementManager manager) {
 		this.manager = manager;
 	}
@@ -66,6 +79,7 @@ public class ModelRenderer
 
 		renderLeftPane(leftSidebarWidth, frameHeight);
 		drawCompass();
+		drawViewportMarquee(leftSidebarWidth);
 		
 		if (renderDropTagets) {
 			renderDropTargets(width, height);
@@ -534,4 +548,61 @@ public class ModelRenderer
 	}
 	
 	
+	private void drawViewportMarquee(int leftSidebarWidth)
+	{
+		if (!viewportMarqueeActive) return;
+
+		int x1 = viewportMarqueeX1;
+		int y1 = viewportMarqueeY1;
+		int x2 = viewportMarqueeX2;
+		int y2 = viewportMarqueeY2;
+
+		int xmin = Math.min(x1, x2);
+		int xmax = Math.max(x1, x2);
+		int yminBL = Math.min(y1, y2);
+		int ymaxBL = Math.max(y1, y2);
+
+		// Clamp to center viewport region (avoid drawing over left panel)
+		xmin = Math.max(leftSidebarWidth, xmin);
+		xmax = Math.max(leftSidebarWidth, xmax);
+
+		// Convert from bottom-left mouse coordinates to top-left ortho coordinates
+		int ymin = this.height - ymaxBL;
+		int ymax = this.height - yminBL;
+
+		GL11.glPushMatrix();
+		GL11.glEnable(GL11.GL_BLEND);
+		GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+
+		GL11.glDisable(GL11.GL_TEXTURE_2D);
+		GL11.glDisable(GL11.GL_LIGHTING);
+
+		// Fill
+		GL11.glColor4f(1f, 1f, 0f, 0.12f);
+		GL11.glBegin(GL11.GL_QUADS);
+		{
+			GL11.glVertex2i(xmin, ymin);
+			GL11.glVertex2i(xmax, ymin);
+			GL11.glVertex2i(xmax, ymax);
+			GL11.glVertex2i(xmin, ymax);
+		}
+		GL11.glEnd();
+
+		// Outline
+		GL11.glColor4f(1f, 1f, 0f, 0.85f);
+		GL11.glLineWidth(1.5f);
+		GL11.glBegin(GL11.GL_LINE_LOOP);
+		{
+			GL11.glVertex2i(xmin, ymin);
+			GL11.glVertex2i(xmax, ymin);
+			GL11.glVertex2i(xmax, ymax);
+			GL11.glVertex2i(xmin, ymax);
+		}
+		GL11.glEnd();
+		GL11.glLineWidth(1f);
+
+		GL11.glDisable(GL11.GL_BLEND);
+		GL11.glPopMatrix();
+	}
+
 }

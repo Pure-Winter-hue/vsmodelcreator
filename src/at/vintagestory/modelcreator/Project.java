@@ -771,6 +771,32 @@ public void removeCurrentElement() {
 		ModelCreator.updateValues(null);
 	}
 	
+	/**
+	 * Add the element matching the OpenGL name (face id) to the current selection
+	 * without clearing existing selection. Used for Shift + click in the 3D viewport.
+	 */
+	public void addElementSelectionByOpenGLName(int openGlName)
+	{
+		tree.addElementSelectionByOpenGLName(openGlName);
+		SelectedElement = tree.getSelectedElement();
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+		ModelCreator.updateValues(null);
+	}
+	
+	/**
+	 * Add all elements whose faces were hit by OpenGL selection inside the marquee rectangle
+	 * without clearing existing selection. Used for Shift + drag in the 3D viewport.
+	 */
+	public void addElementsSelectionByOpenGLNames(Set<Integer> openGlNames)
+	{
+		tree.addElementsSelectionByOpenGLNames(openGlNames);
+		SelectedElement = tree.getSelectedElement();
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+		ModelCreator.updateValues(null);
+	}
+	
+
+	
 	public void selectElement(Element element)
 	{
 		tree.selectElement(element);

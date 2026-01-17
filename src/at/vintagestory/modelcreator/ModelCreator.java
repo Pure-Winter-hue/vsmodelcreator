@@ -129,6 +129,12 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	private int mouseDownX, mouseDownY;
 	private int mouseDownButton = -1;
 	private boolean mouseDownWithCtrl;
+	private boolean mouseDownWithShift;
+	// Viewport marquee selection (Shift + drag)
+	private boolean viewportMarqueeActive;
+	private int marqueeStartX, marqueeStartY;
+	private int marqueeCurX, marqueeCurY;
+
 	boolean mouseDownOnLeftPanel;
 	boolean mouseDownOnCenterPanel;
 	boolean mouseDownOnRightPanel;
@@ -787,6 +793,7 @@ public static boolean renderAttachmentPoints;
 				mouseDownY = lastMouseY;
 				mouseDownButton = Mouse.isButtonDown(0) ? 0 : (Mouse.isButtonDown(1) ? 1 : (Mouse.isButtonDown(2) ? 2 : -1));
 				mouseDownWithCtrl = leftControl;
+				mouseDownWithShift = Keyboard.isKeyDown(Keyboard.KEY_LSHIFT) || Keyboard.isKeyDown(Keyboard.KEY_RSHIFT);
 				grabbing = true;
 			}
 			
@@ -795,6 +802,16 @@ public static boolean renderAttachmentPoints;
 				mouseDownOnCenterPanel = !isOnLeftPanel && !isOnRightPanel;
 				mouseDownOnRightPanel = isOnRightPanel;
 			}
+				// Begin viewport marquee selection on Shift + left mouse drag
+				if (mouseDownOnCenterPanel && mouseDownButton == 0 && mouseDownWithShift && !mouseDownWithCtrl) {
+					viewportMarqueeActive = true;
+					marqueeStartX = mouseDownX;
+					marqueeStartY = mouseDownY;
+					marqueeCurX = mouseDownX;
+					marqueeCurY = mouseDownY;
+					modelrenderer.setViewportMarquee(true, marqueeStartX, marqueeStartY, marqueeCurX, marqueeCurY);
+				}
+
 		}
 		else
 		{
@@ -802,23 +819,46 @@ public static boolean renderAttachmentPoints;
 			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl) {
 				int dx = Math.abs(Mouse.getX() - mouseDownX);
 				int dy = Math.abs(Mouse.getY() - mouseDownY);
-				// Treat small mouse movement as a click (prevents selecting while panning/rotating the camera)
-				if (dx <= 3 && dy <= 3) {
-					int openGlName = getElementGLNameAtPos(mouseDownX, mouseDownY);
-					if (openGlName >= 0) {
-						// Cube + Keyframe: select element. Face: select element + face.
-						if (currentRightTab == 1) {
-							currentProject.selectElementAndFaceByOpenGLName(openGlName);
-						} else {
-							currentProject.selectElementByOpenGLName(openGlName);
+				// Shift + drag: marquee multi-select. Shift + click: add to selection.
+				if (mouseDownWithShift) {
+					if (dx > 3 || dy > 3) {
+						Set<Integer> names = getElementGLNamesInRect(mouseDownX, mouseDownY, Mouse.getX(), Mouse.getY());
+						if (names != null && names.size() > 0) {
+							currentProject.addElementsSelectionByOpenGLNames(names);
 						}
-						SwingUtilities.invokeLater(new Runnable() {
-							@Override
-							public void run() { updateValues(null); }
-						});
+					} else {
+						int openGlName = getElementGLNameAtPos(mouseDownX, mouseDownY);
+						if (openGlName >= 0) {
+							currentProject.addElementSelectionByOpenGLName(openGlName);
+						}
+					}
+					SwingUtilities.invokeLater(new Runnable() {
+						@Override
+						public void run() { updateValues(null); }
+					});
+				} else {
+					// Treat small mouse movement as a click (prevents selecting while panning/rotating the camera)
+					if (dx <= 3 && dy <= 3) {
+						int openGlName = getElementGLNameAtPos(mouseDownX, mouseDownY);
+						if (openGlName >= 0) {
+							// Cube + Keyframe: select element. Face: select element + face.
+							if (currentRightTab == 1) {
+								currentProject.selectElementAndFaceByOpenGLName(openGlName);
+							} else {
+								currentProject.selectElementByOpenGLName(openGlName);
+							}
+							SwingUtilities.invokeLater(new Runnable() {
+								@Override
+								public void run() { updateValues(null); }
+							});
+						}
 					}
 				}
 			}
+
+
+			viewportMarqueeActive = false;
+			modelrenderer.setViewportMarquee(false, 0, 0, 0, 0);
 
 			grabbedElem = null;
 			
@@ -846,6 +886,13 @@ public static boolean renderAttachmentPoints;
 		if (mouseDownOnRightPanel) {
 			rightTopPanel.onMouseDownOnRightPanel();
 			return;
+		}
+
+		// Update marquee rectangle while dragging
+		if (viewportMarqueeActive && grabbing && mouseDownOnCenterPanel) {
+			marqueeCurX = Mouse.getX();
+			marqueeCurY = Mouse.getY();
+			modelrenderer.setViewportMarquee(true, marqueeStartX, marqueeStartY, marqueeCurX, marqueeCurY);
 		}
 		
 		if (leftControl)
@@ -1033,6 +1080,90 @@ public static boolean renderAttachmentPoints;
 		}
 
 		return -1;
+	}
+
+	/**
+	 * Returns all OpenGL selection names (face ids) inside the given screen-space rectangle.
+	 * Used for Shift + drag marquee selection in the 3D viewport.
+	 */
+	public Set<Integer> getElementGLNamesInRect(int x1, int y1, int x2, int y2)
+	{
+		// Clamp to the current 3D viewport bounds
+		int left = leftSidebarWidth();
+		int right = Math.max(left + 1, canvWidth);
+		int top = canvHeight;
+		int bottom = 0;
+
+		x1 = Math.max(left, Math.min(right, x1));
+		x2 = Math.max(left, Math.min(right, x2));
+		y1 = Math.max(bottom, Math.min(top, y1));
+		y2 = Math.max(bottom, Math.min(top, y2));
+
+		int w = Math.abs(x2 - x1);
+		int h = Math.abs(y2 - y1);
+		if (w < 1) w = 1;
+		if (h < 1) h = 1;
+
+		int cx = (x1 + x2) / 2;
+		int cy = (y1 + y2) / 2;
+
+		// Larger selection buffer for marquee selection
+		IntBuffer selBuffer = ByteBuffer.allocateDirect(8192 * 4).order(ByteOrder.nativeOrder()).asIntBuffer();
+		int[] buffer = new int[8192];
+
+		IntBuffer viewBuffer = ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asIntBuffer();
+		int[] viewport = new int[4];
+
+		GL11.glGetInteger(GL11.GL_VIEWPORT, viewBuffer);
+		viewBuffer.get(viewport);
+
+		int hits;
+		GL11.glSelectBuffer(selBuffer);
+		GL11.glRenderMode(GL11.GL_SELECT);
+		GL11.glInitNames();
+		GL11.glPushName(0);
+		GL11.glPushMatrix();
+		{
+			GL11.glMatrixMode(GL11.GL_PROJECTION);
+			GL11.glLoadIdentity();
+			GLU.gluPickMatrix(cx, cy, w, h, IntBuffer.wrap(viewport));
+
+			// glViewPort view must not go negative
+			int ls = leftSidebarWidth();
+			if (canvWidth - ls < 0) {
+				if (modelrenderer.renderedLeftSidebar != null) {
+					modelrenderer.renderedLeftSidebar.nowSidebarWidth = canvWidth - 10;
+					ls = leftSidebarWidth();
+				}
+			}
+			GLU.gluPerspective(60F, (float)(canvWidth - ls) / (float)canvHeight, 0.3F, 1000F);
+
+			modelrenderer.prepareDraw();
+			modelrenderer.drawGridAndElements();
+		}
+		GL11.glPopMatrix();
+		hits = GL11.glRenderMode(GL11.GL_RENDER);
+
+		selBuffer.get(buffer, 0, Math.min(selBuffer.limit(), buffer.length));
+
+		Set<Integer> names = new HashSet<Integer>();
+		if (hits <= 0) return names;
+
+		int idx = 0;
+		for (int i = 0; i < hits; i++)
+		{
+			if (idx + 3 >= buffer.length) break;
+			int nNames = buffer[idx];
+			// int minZ = buffer[idx + 1];
+			// int maxZ = buffer[idx + 2];
+			for (int n = 0; n < nNames; n++) {
+				int name = buffer[idx + 3 + n];
+				if (name != 0) names.add(name);
+			}
+			idx += 3 + nNames;
+		}
+
+		return names;
 	}
 
 	public float applyLimit(float value)
