@@ -4,7 +4,7 @@ This repository is a **divergent branch** of **VS Model Creator (VSMC)** with ex
 
 - Use the **upstream/main VSMC** for the official baseline.
 - I use my **bug-fixing branch** primarily for fixes for the upstream.
-- I use **feature branch** for stable candidate features for VSMC. 🙂 [pw-development-brnach]
+- I use **feature branch** for stable candidate features for VSMC. 🙂 [pw-development-branch]
 -I use **this branch, Hard Winter Edition** to add completely new or experimental features!
 
 ## Links
@@ -20,6 +20,8 @@ This repository is a **divergent branch** of **VS Model Creator (VSMC)** with ex
 - **Left click select model pieces or faces:** Pan with middle mouse or alt + right click.
 - **New left side scrollbar**: Supports middle mouse scroll, useful for the expanded features fitting on the panel.
 - **Drag resize elements panel**
+- **UV Multi Selection:** Shift click drag then hit the move button, and you can move all the UVs with your mouse. (Precursor to stacking, snapping, scaling.)
+- **Model Marquee Selection:** Shift click drag in the viewport to bulk select model pieces. (Precursor to multi move capability.)
 
 ## Carried over from bug-fixing and development-branch:
 - **Hierarchy multi-select:** **Shift + Click** to select multiple elements (panels edit the lead selection). <- precursor to multi part editing
@@ -36,4 +38,6 @@ This repository is a **divergent branch** of **VS Model Creator (VSMC)** with ex
 ---
 
 ## Notes
-Models saved from Hard Winter (
+Models saved from Hard Winter are game-compatible but not backwards VSMC compatible.
+Meaning if you save a model from Hard Winter, you will need to modify it on a Hard Winter version. 
+Due to the addition of scale/orientation keyframe support.
