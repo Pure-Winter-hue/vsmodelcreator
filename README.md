@@ -16,12 +16,16 @@ This repository is a **divergent branch** of **VS Model Creator (VSMC)** with ex
 
 ## New Features in Hard Winter:
 - **Animateable scale on every axis**
-- **Keyframeable instead of fixed origins**
+- **Keyframeable, instead of, fixed-origins**
 - **Left click select model pieces or faces:** Pan with middle mouse or alt + right click.
 - **New left side scrollbar**: Supports middle mouse scroll, useful for the expanded features fitting on the panel.
-- **Drag resize elements panel**
+- **Drag resize elements panel:** The hierarchy panel can now be resized vertically to better read large hierarchies.
 - **UV Multi Selection:** Shift click drag then hit the move button, and you can move all the UVs with your mouse. (Precursor to stacking, snapping, scaling.)
-- **Model Marquee Selection:** Shift click drag in the viewport to bulk select model pieces. (Precursor to multi move capability.)
+- **Model Marquee Selection:** Shift click drag in the viewport to bulk select model pieces. 
+- **A Selects-All:** Like other softwares, tap 'A' on the keyboard to select all elements on the screen.
+- **Element Multi Move with Automatic Keyframes:** You can now select, grab, and move the whole model or sections of it around freely in the animation tab! Not just modeling.
+- **Floor Snap and Free Move:** When using multi move tools, there is a new left UI panel for further options. Floor Snap means whatever position the selection is at now, the bottom of the model becomes the 'floor' and your model will not pass through it. 'Snapping.' Freemove adds a circular handle that lets you move your selection in any direction with the mouse in the viewport, and arrows that are camera view based (relative) instead of exact axis snapped translation.
+
 
 ## Carried over from bug-fixing and development-branch:
 - **Hierarchy multi-select:** **Shift + Click** to select multiple elements (panels edit the lead selection). <- precursor to multi part editing
