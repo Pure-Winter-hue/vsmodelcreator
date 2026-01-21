@@ -80,14 +80,22 @@ public class LeftUVSidebar extends LeftSidebar
 	private enum UvTool { SELECT, MOVE }
 	private UvTool uvTool = UvTool.SELECT;
 
+	// Move scope in entity UV editor: move only the grabbed/selected face(s) vs translating the whole auto-unwrap layout
+	private boolean uvMoveAll = true;
+
 	// Marquee selection behavior
 	private boolean marqueeAdditive = false;
 
 	// Simple tool buttons (top-right)
-	private static final int TOOLBTN_W = 44;
-	private static final int TOOLBTN_H = 18;
-	private static final int TOOLBTN_Y = 6;
-	private static final int TOOLBTN_PAD = 6;
+	// Larger and centered for readability.
+	private static final int TOOLBTN_W = 60;
+	private static final int TOOLBTN_H = 24;
+	private static final int TOOLBTN_Y = 5;
+	private static final int TOOLBTN_PAD = 8;
+
+	// Debounce: onMouseDownOnPanel is called repeatedly while the mouse is held.
+	// Without an edge trigger, tool buttons would toggle multiple times per click.
+	private boolean toolButtonLatch = false;
 
 	// Shift + drag marquee selection
 	private boolean marqueeActive = false;
@@ -746,21 +754,48 @@ public class LeftUVSidebar extends LeftSidebar
 		}
 	}
 
-	private int getMoveBtnX() {
+
+	private int getToolBtnX(int indexFromRight) {
 		int w = GetSidebarWidth();
-		return w - 10 - TOOLBTN_W;
+		return w - 10 - TOOLBTN_W - indexFromRight * (TOOLBTN_W + TOOLBTN_PAD);
+	}
+
+	private int getMoveBtnX() {
+		return getToolBtnX(0);
 	}
 
 	private int getSelectBtnX() {
-		return getMoveBtnX() - TOOLBTN_PAD - TOOLBTN_W;
+		return getToolBtnX(1);
+	}
+
+	private int getMoveScopeBtnX() {
+		return getToolBtnX(2);
+	}
+
+	private int getFlipUdBtnX() {
+		return getToolBtnX(3);
+	}
+
+	private int getFlipLrBtnX() {
+		return getToolBtnX(4);
 	}
 
 	private void drawToolButtons() {
-		int selectX = getSelectBtnX();
 		int moveX = getMoveBtnX();
+		int selectX = getSelectBtnX();
+		int scopeX = getMoveScopeBtnX();
+		int flipUdX = getFlipUdBtnX();
+		int flipLrX = getFlipLrBtnX();
 
 		GL11.glEnable(GL11.GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+		// Convenience duplicates (same operations as the Tools panel)
+		drawToolButton(flipLrX, TOOLBTN_Y, "LR", false);
+		drawToolButton(flipUdX, TOOLBTN_Y, "UD", false);
+
+		// Move scope toggle (only meaningful for auto-unwrap in entity texture mode)
+		drawToolButton(scopeX, TOOLBTN_Y, uvMoveAll ? "ALL" : "THIS", true);
 
 		drawToolButton(selectX, TOOLBTN_Y, "SEL", uvTool == UvTool.SELECT);
 		drawToolButton(moveX, TOOLBTN_Y, "MOVE", uvTool == UvTool.MOVE);
@@ -799,8 +834,43 @@ public class LeftUVSidebar extends LeftSidebar
 		}
 		glEnd();
 
-		EnumFonts.BEBAS_NEUE_12.drawString(x + 6, y + 4, label, new Color(0.9F, 0.9F, 1F, 1F));
+		// Center label for better legibility on different UI scales.
+		float tw = EnumFonts.BEBAS_NEUE_16.getWidth(label);
+		float th = EnumFonts.BEBAS_NEUE_16.getHeight(label);
+		int tx = x + (int)((TOOLBTN_W - tw) / 2f);
+		int ty = y + (int)((TOOLBTN_H - th) / 2f);
+		EnumFonts.BEBAS_NEUE_16.drawString(tx, ty, label, new Color(0.95F, 0.95F, 1F, 1F));
 		TextureImpl.bindNone();
+	}
+
+	private void flipSelectedFaceU() {
+		Element el = manager.getCurrentElement();
+		if (el == null) return;
+		Face face = el.getSelectedFace();
+		if (face == null) return;
+
+		if (face.isAutoUVEnabled()) face.setAutoUVEnabled(false);
+		double su = face.getStartU();
+		double eu = face.getEndU();
+		face.setStartU(eu);
+		face.setEndU(su);
+		face.updateUV();
+		ModelCreator.updateValues(null);
+	}
+
+	private void flipSelectedFaceV() {
+		Element el = manager.getCurrentElement();
+		if (el == null) return;
+		Face face = el.getSelectedFace();
+		if (face == null) return;
+
+		if (face.isAutoUVEnabled()) face.setAutoUVEnabled(false);
+		double sv = face.getStartV();
+		double ev = face.getEndV();
+		face.setStartV(ev);
+		face.setEndV(sv);
+		face.updateUV();
+		ModelCreator.updateValues(null);
 	}
 
 	private boolean handleToolButtonClick() {
@@ -808,9 +878,24 @@ public class LeftUVSidebar extends LeftSidebar
 		int my = canvasHeight - Mouse.getY() + 10;
 		if (my < TOOLBTN_Y || my > TOOLBTN_Y + TOOLBTN_H) return false;
 
-		int selectX = getSelectBtnX();
 		int moveX = getMoveBtnX();
+		int selectX = getSelectBtnX();
+		int scopeX = getMoveScopeBtnX();
+		int flipUdX = getFlipUdBtnX();
+		int flipLrX = getFlipLrBtnX();
 
+		if (mx >= flipLrX && mx <= flipLrX + TOOLBTN_W) {
+			flipSelectedFaceU();
+			return true;
+		}
+		if (mx >= flipUdX && mx <= flipUdX + TOOLBTN_W) {
+			flipSelectedFaceV();
+			return true;
+		}
+		if (mx >= scopeX && mx <= scopeX + TOOLBTN_W) {
+			uvMoveAll = !uvMoveAll;
+			return true;
+		}
 		if (mx >= selectX && mx <= selectX + TOOLBTN_W) {
 			uvTool = UvTool.SELECT;
 			return true;
@@ -820,6 +905,16 @@ public class LeftUVSidebar extends LeftSidebar
 			return true;
 		}
 		return false;
+	}
+
+	private void moveFaceTexNoRewrap(Face face, double du, double dv) {
+		if (face == null) return;
+		if (du == 0 && dv == 0) return;
+		face.textureU += du;
+		face.textureUEnd += du;
+		face.textureV += dv;
+		face.textureVEnd += dv;
+		ModelCreator.DidModify();
 	}
 
 
@@ -1103,6 +1198,7 @@ public class LeftUVSidebar extends LeftSidebar
 	@Override
 	public void mouseUp() {
 		super.mouseUp();
+		toolButtonLatch = false;
 		
 		if (marqueeActive) {
 			finalizeMarqueeSelection();
@@ -1137,7 +1233,9 @@ public class LeftUVSidebar extends LeftSidebar
 		if (nowResizingSidebar) return;
 
 		// Tool buttons (top-right)
-		if (!marqueeActive && !grabbing && lmbDown && handleToolButtonClick()) {
+		// onMouseDownOnPanel is called continuously while held; latch so a click toggles only once.
+		if (!marqueeActive && !grabbing && lmbDown && !toolButtonLatch && handleToolButtonClick()) {
+			toolButtonLatch = true;
 			return;
 		}
 
@@ -1318,21 +1416,34 @@ public class LeftUVSidebar extends LeftSidebar
 							Element e = sel.elem;
 							if (e == null) continue;
 							Face sf = (sel.faceIndex >= 0 && sel.faceIndex < 6) ? e.getAllFaces()[sel.faceIndex] : null;
-							if (sf != null && !e.isAutoUnwrapEnabled()) {
+							if (sf == null) continue;
+
+							if (!e.isAutoUnwrapEnabled()) {
 								sf.moveTextureU(du);
 								sf.moveTextureV(dv);
 							} else {
-								if (movedElems.add(e)) {
-									e.moveTexUVStartNoRewrap(du, dv);
+								if (uvMoveAll) {
+									if (movedElems.add(e)) {
+										e.moveTexUVStartNoRewrap(du, dv);
+									}
+								} else {
+									moveFaceTexNoRewrap(sf, du, dv);
 								}
 							}
 						}
 					} else {
-						if (face != null && !grabbedElement.isAutoUnwrapEnabled()) {
+						if (face == null) {
+							// Fallback: translate the whole layout
+							grabbedElement.moveTexUVStartNoRewrap(du, dv);
+						} else if (!grabbedElement.isAutoUnwrapEnabled()) {
 							face.moveTextureU(du);
 							face.moveTextureV(dv);
 						} else {
-							grabbedElement.moveTexUVStartNoRewrap(du, dv);
+							if (uvMoveAll) {
+								grabbedElement.moveTexUVStartNoRewrap(du, dv);
+							} else {
+								moveFaceTexNoRewrap(face, du, dv);
+							}
 						}
 					}
 				}

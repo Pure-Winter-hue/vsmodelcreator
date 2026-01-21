@@ -2,9 +2,11 @@ package at.vintagestory.modelcreator;
 
 import java.awt.EventQueue;
 import java.io.BufferedReader;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -18,6 +20,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 
 import at.vintagestory.modelcreator.enums.EnumEntityActivityStoppedHandling;
 import at.vintagestory.modelcreator.enums.EnumEntityAnimationEndHandling;
@@ -113,8 +116,15 @@ public class Importer
 
 	private void readComponents(BufferedReader reader, File dir, String projectType) throws IOException
 	{
-		JsonParser parser = new JsonParser();
-		JsonElement read = parser.parse(reader);
+		// Read the full file into memory so we can attempt a recovery pass
+		// in case the JSON is truncated (common with interrupted writes).
+		StringBuilder sb = new StringBuilder();
+		String line;
+		while ((line = reader.readLine()) != null) {
+			sb.append(line).append("\n");
+		}
+
+		JsonElement read = parsePossiblyTruncatedJson(sb.toString());
 
 		if (read.isJsonObject())
 		{
@@ -182,6 +192,123 @@ public class Importer
 				
 			}
 		}
+	}
+
+	private JsonElement parsePossiblyTruncatedJson(String jsonText)
+	{
+		JsonParser parser = new JsonParser();
+		try {
+			return parser.parse(jsonText);
+		} catch (JsonSyntaxException ex) {
+			if (hasEofCause(ex)) {
+				String repaired = tryRepairTruncatedJson(jsonText);
+				if (repaired != null) {
+					try {
+						JsonElement el = parser.parse(repaired);
+						Warnings += "The JSON file looked truncated (unexpected end-of-file). I attempted an automatic repair by closing missing brackets/braces. Please re-save the file to prevent future issues.\n\n";
+						return el;
+					} catch (Exception ignored) {
+						// fall through to original exception
+					}
+				}
+			}
+			throw ex;
+		}
+	}
+
+	private boolean hasEofCause(Throwable ex)
+	{
+		Throwable cur = ex;
+		while (cur != null) {
+			if (cur instanceof EOFException) return true;
+			cur = cur.getCause();
+		}
+		return false;
+	}
+
+	/**
+	 * Best-effort repair for truncated JSON.
+	 *
+	 * Strategy:
+	 * - Track open { and [ (outside of strings)
+	 * - If EOF is reached with unclosed containers, append the missing closing tokens
+	 * - Remove a dangling trailing comma (and commas directly before ] or })
+	 *
+	 * This won't recover files truncated mid-token, but it often rescues files
+	 * missing only the final closing braces/brackets.
+	 */
+	private String tryRepairTruncatedJson(String jsonText)
+	{
+		if (jsonText == null) return null;
+		String s = jsonText;
+		if (s.trim().isEmpty()) return null;
+
+		ArrayDeque<Character> stack = new ArrayDeque<Character>();
+		boolean inString = false;
+		boolean escape = false;
+
+		StringBuilder scanned = new StringBuilder(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			scanned.append(c);
+
+			if (inString) {
+				if (escape) {
+					escape = false;
+					continue;
+				}
+				if (c == '\\') {
+					escape = true;
+					continue;
+				}
+				if (c == '"') {
+					inString = false;
+				}
+				continue;
+			}
+
+			if (c == '"') {
+				inString = true;
+				continue;
+			}
+
+			if (c == '{') stack.push('}');
+			else if (c == '[') stack.push(']');
+			else if (c == '}' || c == ']') {
+				if (!stack.isEmpty() && stack.peek() == c) {
+					stack.pop();
+				}
+			}
+		}
+
+		String trimmed = scanned.toString().replaceAll("\\s+$", "");
+		// If the file ends with a trailing comma, remove it.
+		trimmed = trimmed.replaceAll(",\\s*$", "");
+		// If we ended inside a string, close it.
+		if (inString) trimmed = trimmed + "\"";
+
+		// If the last non-whitespace character is a colon, it's likely truncated mid-key.
+		char last = lastNonWhitespaceChar(trimmed);
+		if (last == ':') return null;
+
+		StringBuilder repaired = new StringBuilder(trimmed);
+		while (!stack.isEmpty()) repaired.append(stack.pop());
+
+		String out = repaired.toString();
+		// Clean up commas before closing brackets/braces.
+		out = out.replaceAll(",\\s*(\\}|\\])", "$1");
+		out = out.replaceAll(",\\s*$", "");
+		return out;
+	}
+
+	private char lastNonWhitespaceChar(String s)
+	{
+		if (s == null || s.isEmpty()) return 0;
+		for (int i = s.length() - 1; i >= 0; i--) {
+			char c = s.charAt(i);
+			if (!Character.isWhitespace(c)) return c;
+		}
+		return 0;
 	}
 
 

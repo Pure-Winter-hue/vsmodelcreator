@@ -25,14 +25,20 @@ public abstract class LeftSidebar
 {
 	/* Sidebar Variables */
 	private final int SIDEBAR_WIDTH = 4 * 32 + 20;
+	// Prevent collapsing so far that controls overlap
+	private final int SIDEBAR_MIN_WIDTH = 120;
 
 	private String title;
 	
 	public int nowSidebarWidth = SIDEBAR_WIDTH;
 	
-	boolean nowResizingSidebar;
-	int lastGrabMouseX;
-	boolean overSidebar;
+	protected boolean nowResizingSidebar;
+	protected int lastGrabMouseX;
+	protected boolean overSidebar;
+	
+	protected boolean isResizingSidebar() {
+		return nowResizingSidebar;
+	}
 	
 	public int GetSidebarWidth() {
 		return nowSidebarWidth;
@@ -114,7 +120,7 @@ public abstract class LeftSidebar
 			nowSidebarWidth += nowMouseX - lastGrabMouseX;
 			lastGrabMouseX = nowMouseX;
 			
-			nowSidebarWidth = Math.max(4, Math.min(nowSidebarWidth, ModelCreator.Instance.canvWidth - 1));
+			nowSidebarWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(nowSidebarWidth, ModelCreator.Instance.canvWidth - 1));
 			
 			onResized();
 		}

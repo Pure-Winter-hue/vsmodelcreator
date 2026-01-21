@@ -56,6 +56,7 @@ import at.vintagestory.modelcreator.gui.right.RightPanel;
 import at.vintagestory.modelcreator.gui.right.face.FaceTexturePanel;
 import at.vintagestory.modelcreator.input.InputManager;
 import at.vintagestory.modelcreator.input.command.FactoryProjectCommand;
+import at.vintagestory.modelcreator.input.command.CommandSelectAll;
 import at.vintagestory.modelcreator.input.command.ProjectCommand;
 import at.vintagestory.modelcreator.input.key.InputKeyEvent;
 import at.vintagestory.modelcreator.input.listener.ListenerKeyPressInterval;
@@ -63,10 +64,15 @@ import at.vintagestory.modelcreator.input.listener.ListenerKeyPressOnce;
 import at.vintagestory.modelcreator.interfaces.IElementManager;
 import at.vintagestory.modelcreator.interfaces.ITextureCallback;
 import at.vintagestory.modelcreator.model.Animation;
+import at.vintagestory.modelcreator.model.AnimationFrame;
+import at.vintagestory.modelcreator.model.AnimFrameElement;
 import at.vintagestory.modelcreator.model.AttachmentPoint;
+import at.vintagestory.modelcreator.model.Face;
 import at.vintagestory.modelcreator.model.Element;
 import at.vintagestory.modelcreator.model.PendingTexture;
 import at.vintagestory.modelcreator.model.TextureEntry;
+import at.vintagestory.modelcreator.util.GameMath;
+import at.vintagestory.modelcreator.util.Mat4f;
 import at.vintagestory.modelcreator.util.screenshot.AnimationCapture;
 import at.vintagestory.modelcreator.util.screenshot.PendingScreenshot;
 import at.vintagestory.modelcreator.util.screenshot.ScreenshotCapture;
@@ -105,6 +111,17 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	public static float TreadMillSpeed = 1f;
 	public static float noTexScale = 2;
 	public static int currentRightTab;
+	// Thickness (px) of the viewport translate gizmo axis lines (persisted)
+	public static int viewportAxisLineThickness = 10;
+	// Length (px) of the viewport translate gizmo axis lines (persisted)
+	public static int viewportAxisLineLength = 110;
+	// When true, the translate gizmo uses camera-relative movement (legacy behavior). When false, it uses world axes.
+	public static boolean viewportFreedomModeEnabled = false;
+
+	// Whether the viewport translate gizmo center circle handle is enabled (persisted)
+	public static boolean viewportCenterCircleEnabled = true;
+	// Radius (px) of the viewport translate gizmo center circle (persisted)
+	public static int viewportCenterCircleRadius = 18;
 
 	// Canvas Variables
 	private final static AtomicReference<Dimension> newCanvasSize = new AtomicReference<Dimension>();
@@ -145,6 +162,7 @@ public class ModelCreator extends JFrame implements ITextureCallback
 
 	
 	public LeftSidebar uvSidebar;
+	public LeftSidebar viewportSidebar;
 	public static GuiMenu guiMain;
 	public static LeftKeyFramesPanel leftKeyframesPanel;
 	
@@ -153,6 +171,8 @@ public static boolean renderAttachmentPoints;
 
 	
 	public ModelRenderer modelrenderer;
+	// RightPanel may call setSidebar() during UI initialization before modelrenderer exists.
+	private LeftSidebar pendingLeftSidebar;
 	
 	public long prevFrameMillisec;
 	
@@ -191,6 +211,15 @@ public static boolean renderAttachmentPoints;
 		autoreloadTexture = prefs.getBoolean("autoreloadTexture", true);
 		repositionWhenReparented = prefs.getBoolean("repositionWhenReparented", true);
 		elementTreeHeight = prefs.getInt("elementTreeHeight", 240);
+		viewportAxisLineThickness = prefs.getInt("viewportAxisLineThickness", 10);
+		viewportAxisLineLength = prefs.getInt("viewportAxisLineLength", 110);
+		viewportFreedomModeEnabled = prefs.getBoolean("viewportFreedomModeEnabled", false);
+		viewportAxisLineThickness = Math.max(2, Math.min(40, viewportAxisLineThickness));
+		viewportAxisLineLength = Math.max(40, Math.min(260, viewportAxisLineLength));
+
+		viewportCenterCircleEnabled = prefs.getBoolean("viewportCenterCircleEnabled", true);
+		viewportCenterCircleRadius = prefs.getInt("viewportCenterCircleRadius", 18);
+		viewportCenterCircleRadius = Math.max(6, Math.min(60, viewportCenterCircleRadius));
 		
 		Instance = this;
 		
@@ -264,6 +293,7 @@ public static boolean renderAttachmentPoints;
 		ProjectCommand texReload = factoryCommand.CreateReloadTextureCommand();
 		ProjectCommand texToggle = factoryCommand.CreateToggleTextureCommand();
 		ProjectCommand texRandom = factoryCommand.CreateRandomizeTextureCommand();
+		ProjectCommand selectAll = new CommandSelectAll();
 		
 		ProjectCommand elementUp = factoryCommand.CreateMoveSelectedElementCommandUp(this);
 		ProjectCommand elementForward = factoryCommand.CreateMoveSelectedElementCommandForward(this);
@@ -279,6 +309,8 @@ public static boolean renderAttachmentPoints;
 		manager.subscribe(new ListenerKeyPressOnce(texReload, Keyboard.KEY_LCONTROL, Keyboard.KEY_R));
 		manager.subscribe(new ListenerKeyPressOnce(texToggle, Keyboard.KEY_LCONTROL, Keyboard.KEY_T));
 		manager.subscribe(new ListenerKeyPressOnce(texRandom, Keyboard.KEY_LCONTROL, Keyboard.KEY_B));
+		// Plain 'A' should select all in Cube (modeling) and Keyframe (animation) modes
+		manager.subscribe(new ListenerKeyPressOnce(selectAll, Keyboard.KEY_A));
 		
 		manager.subscribe(new ListenerKeyPressInterval(elementUp, Keyboard.KEY_PRIOR));
 		manager.subscribe(new ListenerKeyPressInterval(elementForward, Keyboard.KEY_UP));
@@ -453,6 +485,12 @@ public static boolean renderAttachmentPoints;
 		//== end Canvas trickery ==//
 		
 		modelrenderer = new ModelRenderer(rightTopPanel);
+		// Apply any sidebar requested during earlier UI initialization.
+		if (pendingLeftSidebar != null) {
+			LeftSidebar s = pendingLeftSidebar;
+			pendingLeftSidebar = null;
+			setSidebar(s);
+		}
 		
 		scroll = new JScrollPane((JPanel) rightTopPanel);
 		scroll.setBorder(BorderFactory.createEmptyBorder());
@@ -463,6 +501,12 @@ public static boolean renderAttachmentPoints;
 		add(scroll, BorderLayout.EAST);
 		
 		uvSidebar = new LeftUVSidebar("UV Editor", rightTopPanel);
+		viewportSidebar = new at.vintagestory.modelcreator.gui.left.LeftViewportSidebar();
+
+		// If no sidebar has been selected yet (startup), default to the viewport sidebar.
+		if (modelrenderer.renderedLeftSidebar == null) {
+			setSidebar(viewportSidebar);
+		}
 		
 		JPopupMenu.setDefaultLightWeightPopupEnabled(false);
 		setJMenuBar(guiMain = new GuiMenu(this));
@@ -772,6 +816,410 @@ public static boolean renderAttachmentPoints;
 	
 	public boolean leftControl;
 	public boolean isOnRightPanel;
+
+	/**
+	 * When enabled, viewport transforms (Ctrl+drag) will apply to all currently selected elements
+	 * instead of only the active element.
+	 */
+	public static boolean viewportGroupMoveEnabled = false;
+	/**
+	 * When enabled, viewport translate operations will not allow moving any selected element
+	 * below its Y value at the start of the current drag.
+	 */
+	public static boolean viewportFloorSnapEnabled = false;
+
+	// Viewport gizmo drag state
+	private boolean viewportGizmoDragActive;
+	private int viewportGizmoDragMode; // 0 none, 1 X, 2 Y, 3 Z, 4 FREE
+	private double viewportGizmoAxisDirX;
+	private double viewportGizmoAxisDirY;
+	// For world-axis mode, use a ray-to-axis constraint for precise axis movement (prevents drift).
+	private boolean viewportGizmoUseRayConstraint;
+	private double viewportGizmoAxisOriginX, viewportGizmoAxisOriginY, viewportGizmoAxisOriginZ;
+	private double viewportGizmoAxisWorldDirX, viewportGizmoAxisWorldDirY, viewportGizmoAxisWorldDirZ;
+	private double viewportGizmoAxisParamStart;
+	/**
+	 * Cached mapping from world-axis delta (X/Y/Z) to the element's local StartX/StartY/StartZ delta.
+	 * This prevents axis-drag drift when elements (or their parents) are rotated.
+	 *
+	 * Layout per element: [wx->(dx,dy,dz), wy->(dx,dy,dz), wz->(dx,dy,dz)] as 9 doubles.
+	 */
+	private java.util.HashMap<Element, double[]> viewportGizmoWorldAxisToLocal;
+	private java.util.HashMap<Element, Double> viewportGizmoBaseX;
+	private java.util.HashMap<Element, Double> viewportGizmoBaseZ;
+	private double viewportGizmoFreeRightX, viewportGizmoFreeRightY, viewportGizmoFreeRightZ;
+	private double viewportGizmoFreeUpX, viewportGizmoFreeUpY, viewportGizmoFreeUpZ;
+	private java.util.List<Element> viewportGizmoElems;
+	private java.util.HashMap<Element, Double> viewportGizmoBaseY;
+	private boolean viewportGizmoSkipSelection;
+	// Keyframe (animation tab) gizmo drag support
+	private boolean viewportGizmoDragInKeyframeMode;
+	private int viewportGizmoDragAnimVersion;
+	private java.util.HashMap<Element, AnimFrameElement> viewportGizmoKeyframeElems;
+
+		private java.util.List<Element> getSelectedRootElementsForMove(Element lead, boolean moveAll)
+		{
+			if (!moveAll || currentProject == null || currentProject.SelectedElements == null || currentProject.SelectedElements.size() <= 1) {
+				return java.util.Collections.singletonList(lead);
+			}
+
+			java.util.HashSet<Element> selected = new java.util.HashSet<Element>(currentProject.SelectedElements);
+			java.util.ArrayList<Element> roots = new java.util.ArrayList<Element>();
+			for (Element e : currentProject.SelectedElements) {
+				if (e == null) continue;
+				boolean hasSelectedAncestor = false;
+				Element p = e.ParentElement;
+				while (p != null) {
+					if (selected.contains(p)) { hasSelectedAncestor = true; break; }
+					p = p.ParentElement;
+				}
+				if (!hasSelectedAncestor) roots.add(e);
+			}
+			if (roots.isEmpty()) {
+				return java.util.Collections.singletonList(lead);
+			}
+			return roots;
+		}
+
+		private void tryStartViewportGizmoDrag()
+		{
+			if (viewportGizmoDragActive || currentProject == null) return;
+			Element selected = currentProject.SelectedElement;
+			if (selected == null) return;
+
+			// Screen-space hit test against the overlay gizmo (cannot be occluded by geometry)
+			int mode = modelrenderer.hitTestViewportMoveGizmo(mouseDownX, mouseDownY);
+			if (mode == 0) return;
+			// The center handle is only meaningful in freedom mode.
+			if (mode == 4 && !viewportFreedomModeEnabled) return;
+
+
+			viewportGizmoDragMode = mode;
+			viewportGizmoDragActive = true;
+			viewportGizmoSkipSelection = true;
+			grabbedElem = selected;
+
+			viewportGizmoUseRayConstraint = false;
+			viewportGizmoAxisParamStart = 0;
+			viewportGizmoBaseX = null;
+			viewportGizmoBaseZ = null;
+
+			// Screen-space axis direction used to interpret mouse delta.
+			// Mouse coordinates are window-space with origin bottom-left.
+			double[] dir = modelrenderer.getViewportMoveGizmoAxisDirWindow(mode);
+			viewportGizmoAxisDirX = dir != null ? dir[0] : 0;
+			viewportGizmoAxisDirY = dir != null ? dir[1] : 0;
+
+			viewportGizmoElems = getSelectedRootElementsForMove(selected, viewportGroupMoveEnabled);
+
+			// In Keyframe tab, viewport translate should animate (write keyframe position offsets), not edit the base model.
+			viewportGizmoDragInKeyframeMode = (ModelCreator.currentRightTab == 2 && currentProject != null && currentProject.SelectedAnimation != null);
+			viewportGizmoDragAnimVersion = viewportGizmoDragInKeyframeMode ? currentProject.CurrentAnimVersion() : 0;
+			viewportGizmoKeyframeElems = viewportGizmoDragInKeyframeMode ? new java.util.HashMap<Element, AnimFrameElement>() : null;
+
+			AnimationFrame curAnimFrame = null;
+			if (viewportGizmoDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+				int cf = currentProject.SelectedAnimation.currentFrame;
+				if (currentProject.SelectedAnimation.allFrames != null && cf >= 0 && cf < currentProject.SelectedAnimation.allFrames.size()) {
+					curAnimFrame = currentProject.SelectedAnimation.allFrames.get(cf);
+				}
+			}
+
+			viewportGizmoBaseY = new java.util.HashMap<Element, Double>();
+			viewportGizmoBaseX = new java.util.HashMap<Element, Double>();
+			viewportGizmoBaseZ = new java.util.HashMap<Element, Double>();
+			viewportGizmoWorldAxisToLocal = new java.util.HashMap<Element, double[]>();
+
+			for (Element e : viewportGizmoElems) {
+				if (e == null) continue;
+
+				if (viewportGizmoDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+					// Ensure a keyframe element exists and that Position is enabled for this element.
+					AnimFrameElement kf = currentProject.SelectedAnimation.TogglePosition(e, true);
+					if (kf != null) {
+						viewportGizmoKeyframeElems.put(e, kf);
+						viewportGizmoBaseY.put(e, kf.getOffsetY());
+						viewportGizmoBaseX.put(e, kf.getOffsetX());
+						viewportGizmoBaseZ.put(e, kf.getOffsetZ());
+					} else {
+						viewportGizmoBaseY.put(e, 0d);
+						viewportGizmoBaseX.put(e, 0d);
+						viewportGizmoBaseZ.put(e, 0d);
+					}
+					// Keep world-axis drags straight even with animated rotations in the parent chain.
+					viewportGizmoWorldAxisToLocal.put(e, computeWorldAxisToLocalMapAnimated(e, curAnimFrame, viewportGizmoDragAnimVersion));
+				} else {
+					viewportGizmoBaseY.put(e, e.getStartY());
+					viewportGizmoBaseX.put(e, e.getStartX());
+					viewportGizmoBaseZ.put(e, e.getStartZ());
+					// Only needed for world-axis mode (non-freedom) to keep motion straight in world space,
+					// even when elements/parents are rotated.
+					viewportGizmoWorldAxisToLocal.put(e, computeWorldAxisToLocalMap(e));
+				}
+			}
+			// In world-axis mode, use a precise ray-to-axis constraint so dragging stays locked to the axis.
+			if (!viewportFreedomModeEnabled && (mode == 1 || mode == 2 || mode == 3)) {
+				viewportGizmoAxisOriginX = modelrenderer.viewportMoveGizmoWorldX;
+				viewportGizmoAxisOriginY = modelrenderer.viewportMoveGizmoWorldY;
+				viewportGizmoAxisOriginZ = modelrenderer.viewportMoveGizmoWorldZ;
+				switch (mode) {
+					case 1: viewportGizmoAxisWorldDirX = 1; viewportGizmoAxisWorldDirY = 0; viewportGizmoAxisWorldDirZ = 0; break;
+					case 2: viewportGizmoAxisWorldDirX = 0; viewportGizmoAxisWorldDirY = 1; viewportGizmoAxisWorldDirZ = 0; break;
+					case 3: viewportGizmoAxisWorldDirX = 0; viewportGizmoAxisWorldDirY = 0; viewportGizmoAxisWorldDirZ = 1; break;
+				}
+				Double t0 = computeAxisParamFromMouse(mouseDownX, mouseDownY);
+				if (t0 != null && Double.isFinite(t0)) {
+					viewportGizmoAxisParamStart = t0;
+					viewportGizmoUseRayConstraint = true;
+				}
+			}
+
+			// Precompute drag basis from the camera orientation at drag start (freedom mode only).
+			// Option A: horizontal movement follows camera-right projected onto the ground plane (XZ).
+			double ry = Math.toRadians(modelrenderer.camera.getRY());
+			viewportGizmoFreeRightX = Math.cos(ry);
+			viewportGizmoFreeRightY = 0;
+			viewportGizmoFreeRightZ = Math.sin(ry);
+
+			viewportGizmoFreeUpX = 0;
+			viewportGizmoFreeUpY = 1;
+			viewportGizmoFreeUpZ = 0;
+		}
+
+		/** Returns the axis parameter t for the closest point on the gizmo axis to the current mouse ray. */
+		private Double computeAxisParamFromMouse(int mouseX, int mouseY)
+		{
+			double[] ray = modelrenderer.getMouseRayWorld(mouseX, mouseY);
+			if (ray == null) return null;
+			return closestParamRayToAxis(
+				ray[0], ray[1], ray[2],
+				ray[3], ray[4], ray[5],
+				viewportGizmoAxisOriginX, viewportGizmoAxisOriginY, viewportGizmoAxisOriginZ,
+				viewportGizmoAxisWorldDirX, viewportGizmoAxisWorldDirY, viewportGizmoAxisWorldDirZ
+			);
+		}
+
+		/**
+		 * Computes the axis line parameter t at the closest point between a ray and an axis line.
+		 * Ray: R0 + s*Rd, Axis: A0 + t*Ad. Returns t, or null if nearly parallel.
+		 */
+		private static Double closestParamRayToAxis(
+			double r0x, double r0y, double r0z,
+			double rdx, double rdy, double rdz,
+			double a0x, double a0y, double a0z,
+			double adx, double ady, double adz)
+		{
+			// Normalize directions defensively
+			double rlen = Math.sqrt(rdx*rdx + rdy*rdy + rdz*rdz);
+			double alen = Math.sqrt(adx*adx + ady*ady + adz*adz);
+			if (!Double.isFinite(rlen) || rlen < 1e-9) return null;
+			if (!Double.isFinite(alen) || alen < 1e-9) return null;
+			rdx /= rlen; rdy /= rlen; rdz /= rlen;
+			adx /= alen; ady /= alen; adz /= alen;
+
+			double w0x = r0x - a0x;
+			double w0y = r0y - a0y;
+			double w0z = r0z - a0z;
+			double a = 1.0; // rdir normalized
+			double b = rdx*adx + rdy*ady + rdz*adz;
+			double c = 1.0; // adir normalized
+			double d = rdx*w0x + rdy*w0y + rdz*w0z;
+			double e = adx*w0x + ady*w0y + adz*w0z;
+			double den = a*c - b*b;
+			if (Math.abs(den) < 1e-6) return null; // nearly parallel
+			// s = (b*e - c*d)/den
+			// t = (a*e - b*d)/den
+			double t = (a*e - b*d) / den;
+			return t;
+		}
+
+		/**
+		 * Builds a world-rotation matrix (4x4) for the given element, including all parent rotations,
+		 * but excluding any StartX/StartY/StartZ translations. Translation does not affect the rotation part,
+		 * but omitting it keeps the math clearer.
+		 */
+		private static float[] buildRotationMatrixToElement(Element elem)
+		{
+			float[] mat = Mat4f.Identity_(new float[16]);
+			if (elem == null) return mat;
+			java.util.ArrayList<Element> chain = new java.util.ArrayList<Element>();
+			Element cur = elem;
+			while (cur != null) {
+				chain.add(0, cur);
+				cur = cur.ParentElement;
+			}
+			for (Element e : chain) {
+				float ox = (float)e.getOriginX();
+				float oy = (float)e.getOriginY();
+				float oz = (float)e.getOriginZ();
+				Mat4f.Translate(mat, mat, new float[] { ox, oy, oz });
+				Mat4f.RotateX(mat, mat, (float)e.getRotationX() * GameMath.DEG2RAD);
+				Mat4f.RotateY(mat, mat, (float)e.getRotationY() * GameMath.DEG2RAD);
+				Mat4f.RotateZ(mat, mat, (float)e.getRotationZ() * GameMath.DEG2RAD);
+				Mat4f.Translate(mat, mat, new float[] { -ox, -oy, -oz });
+			}
+			return mat;
+		}
+
+		/**
+		 * Precomputes a mapping so we can convert a desired WORLD delta (along X/Y/Z)
+		 * into the local StartX/StartY/StartZ delta that produces that world motion.
+		 */
+		private static double[] computeWorldAxisToLocalMap(Element elem)
+		{
+			float[] m = buildRotationMatrixToElement(elem);
+			// Column-major basis vectors for local axes in world space
+			// col0 = local X in world, col1 = local Y in world, col2 = local Z in world
+			double c0x = m[0],  c0y = m[1],  c0z = m[2];
+			double c1x = m[4],  c1y = m[5],  c1z = m[6];
+			double c2x = m[8],  c2y = m[9],  c2z = m[10];
+
+			// For pure rotation matrices, inverse is transpose, so:
+			// local = R^T * world.
+			// The local delta for a unit WORLD axis is simply the world basis projected onto local axes.
+			double[] out = new double[9];
+			// world X -> local delta (dx,dy,dz)
+			out[0] = c0x; out[1] = c1x; out[2] = c2x;
+			// world Y -> local delta
+			out[3] = c0y; out[4] = c1y; out[5] = c2y;
+			// world Z -> local delta
+			out[6] = c0z; out[7] = c1z; out[8] = c2z;
+			return out;
+		}
+
+		/**
+		 * Variant of {@link #computeWorldAxisToLocalMap(Element)} for animation/keyframe mode.
+		 * Includes animated rotations from the current frame so world-axis drags stay straight
+		 * even when parent rotations come from keyframes.
+		 *
+		 * Note: Animation version > 0 applies position offsets *after* local rotate/scale, so the
+		 * moved element's own rotation does not affect its translation. In that case we only
+		 * include parent rotations when building the mapping.
+		 */
+		private static float[] buildRotationMatrixToElementAnimated(Element elem, AnimationFrame curAnimFrame, int animVersion)
+		{
+			float[] mat = Mat4f.Identity_(new float[16]);
+			if (elem == null) return mat;
+
+			java.util.ArrayList<Element> chain = new java.util.ArrayList<Element>();
+			Element cur = elem;
+			while (cur != null) {
+				chain.add(0, cur);
+				cur = cur.ParentElement;
+			}
+
+			boolean includeSelfRotation = animVersion <= 0;
+			int end = chain.size();
+			if (!includeSelfRotation && end > 0) end--; // parents only
+
+			for (int i = 0; i < end; i++) {
+				Element e = chain.get(i);
+				double rx = e.getRotationX();
+				double ry = e.getRotationY();
+				double rz = e.getRotationZ();
+
+				if (curAnimFrame != null) {
+					AnimFrameElement ae = curAnimFrame.GetAnimFrameElementRec(e);
+					if (ae == null) ae = curAnimFrame.GetAnimFrameElementRecByName(e.getName());
+					if (ae != null) {
+						rx += ae.getRotationX();
+						ry += ae.getRotationY();
+						rz += ae.getRotationZ();
+					}
+				}
+
+				Mat4f.RotateX(mat, mat, (float)rx * GameMath.DEG2RAD);
+				Mat4f.RotateY(mat, mat, (float)ry * GameMath.DEG2RAD);
+				Mat4f.RotateZ(mat, mat, (float)rz * GameMath.DEG2RAD);
+			}
+
+			return mat;
+		}
+
+		private static double[] computeWorldAxisToLocalMapAnimated(Element elem, AnimationFrame curAnimFrame, int animVersion)
+		{
+			float[] m = buildRotationMatrixToElementAnimated(elem, curAnimFrame, animVersion);
+			// Column-major basis vectors for local axes in world space
+			double c0x = m[0],  c0y = m[1],  c0z = m[2];
+			double c1x = m[4],  c1y = m[5],  c1z = m[6];
+			double c2x = m[8],  c2y = m[9],  c2z = m[10];
+
+			double[] out = new double[9];
+			// world X -> local delta
+			out[0] = c0x; out[1] = c1x; out[2] = c2x;
+			// world Y -> local delta
+			out[3] = c0y; out[4] = c1y; out[5] = c2y;
+			// world Z -> local delta
+			out[6] = c0z; out[7] = c1z; out[8] = c2z;
+			return out;
+		}
+
+
+
+	/**
+	 * Gizmo-only OpenGL pick pass.
+	 *
+	 * The default getElementGLNameAtPos() draws the entire scene for selection, which
+	 * means the closest face under the cursor will often "win" over the gizmo when
+	 * the gizmo is inside (or behind) model geometry. For gizmo interactions we want
+	 * the opposite: if you're clicking on a handle, that handle should be selectable.
+	 */
+	public int getViewportGizmoGLNameAtPos(int x, int y)
+	{
+		if (currentProject == null || currentProject.SelectedElement == null) return -1;
+
+		IntBuffer selBuffer = ByteBuffer.allocateDirect(1024).order(ByteOrder.nativeOrder()).asIntBuffer();
+		int[] buffer = new int[256];
+
+		IntBuffer viewBuffer = ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asIntBuffer();
+		int[] viewport = new int[4];
+
+		GL11.glGetInteger(GL11.GL_VIEWPORT, viewBuffer);
+		viewBuffer.get(viewport);
+
+		GL11.glSelectBuffer(selBuffer);
+		GL11.glRenderMode(GL11.GL_SELECT);
+		GL11.glInitNames();
+		GL11.glPushName(0);
+		GL11.glPushMatrix();
+		{
+			GL11.glMatrixMode(GL11.GL_PROJECTION);
+			GL11.glLoadIdentity();
+			GLU.gluPickMatrix(x, y, 3, 3, IntBuffer.wrap(viewport));
+			// Same negative-width safeguard as getElementGLNameAtPos
+			int leftSidebarWidth = leftSidebarWidth();
+			if (canvWidth - leftSidebarWidth < 0)  {
+				if (modelrenderer.renderedLeftSidebar != null) {
+					modelrenderer.renderedLeftSidebar.nowSidebarWidth = canvWidth - 10;
+					leftSidebarWidth = leftSidebarWidth();
+				}
+			}
+			GLU.gluPerspective(60F, (float)(canvWidth - leftSidebarWidth) / (float)canvHeight, 0.3F, 1000F);
+
+			modelrenderer.prepareDraw();
+			currentProject.SelectedElement.drawSelectionExtras();
+		}
+		GL11.glPopMatrix();
+
+		int hits = GL11.glRenderMode(GL11.GL_RENDER);
+		selBuffer.get(buffer);
+		if (hits > 0)
+		{
+			int name = buffer[3];
+			int depth = buffer[1];
+			for (int i = 1; i < hits; i++)
+			{
+				if ((buffer[i * 4 + 1] < depth || name == 0) && buffer[i * 4 + 3] != 0)
+				{
+					name = buffer[i * 4 + 3];
+					depth = buffer[i * 4 + 1];
+				}
+			}
+			return name;
+		}
+
+		return -1;
+	}
 	private void handleInputMouse(int leftSidebarWidth) {
 		
 		final float cameraMod = Math.abs(modelrenderer.camera.getZ());
@@ -794,6 +1242,18 @@ public static boolean renderAttachmentPoints;
 				mouseDownButton = Mouse.isButtonDown(0) ? 0 : (Mouse.isButtonDown(1) ? 1 : (Mouse.isButtonDown(2) ? 2 : -1));
 				mouseDownWithCtrl = leftControl;
 				mouseDownWithShift = Keyboard.isKeyDown(Keyboard.KEY_LSHIFT) || Keyboard.isKeyDown(Keyboard.KEY_RSHIFT);
+					viewportGizmoDragActive = false;
+					viewportGizmoDragMode = 0;
+					viewportGizmoUseRayConstraint = false;
+					viewportGizmoElems = null;
+					viewportGizmoBaseY = null;
+					viewportGizmoBaseX = null;
+					viewportGizmoBaseZ = null;
+					viewportGizmoWorldAxisToLocal = null;
+					viewportGizmoDragInKeyframeMode = false;
+					viewportGizmoDragAnimVersion = 0;
+					viewportGizmoKeyframeElems = null;
+					viewportGizmoSkipSelection = false;
 				grabbing = true;
 			}
 			
@@ -802,8 +1262,14 @@ public static boolean renderAttachmentPoints;
 				mouseDownOnCenterPanel = !isOnLeftPanel && !isOnRightPanel;
 				mouseDownOnRightPanel = isOnRightPanel;
 			}
-				// Begin viewport marquee selection on Shift + left mouse drag
-				if (mouseDownOnCenterPanel && mouseDownButton == 0 && mouseDownWithShift && !mouseDownWithCtrl) {
+
+					// Try start a move gizmo drag (axis or center handle) when clicking in the viewport
+					if (mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithShift) {
+						tryStartViewportGizmoDrag();
+					}
+
+					// Begin viewport marquee selection on Shift + left mouse drag
+					if (!viewportGizmoDragActive && mouseDownOnCenterPanel && mouseDownButton == 0 && mouseDownWithShift && !mouseDownWithCtrl) {
 					viewportMarqueeActive = true;
 					marqueeStartX = mouseDownX;
 					marqueeStartY = mouseDownY;
@@ -816,7 +1282,7 @@ public static boolean renderAttachmentPoints;
 		else
 		{
 			// Mouse button(s) released
-			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl) {
+			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl && !viewportGizmoSkipSelection) {
 				int dx = Math.abs(Mouse.getX() - mouseDownX);
 				int dy = Math.abs(Mouse.getY() - mouseDownY);
 				// Shift + drag: marquee multi-select. Shift + click: add to selection.
@@ -841,11 +1307,29 @@ public static boolean renderAttachmentPoints;
 					if (dx <= 3 && dy <= 3) {
 						int openGlName = getElementGLNameAtPos(mouseDownX, mouseDownY);
 						if (openGlName >= 0) {
-							// Cube + Keyframe: select element. Face: select element + face.
-							if (currentRightTab == 1) {
-								currentProject.selectElementAndFaceByOpenGLName(openGlName);
+							// If group-move is enabled and the user clicked an already-selected element,
+							// keep the multi-selection intact: only change the active element/face.
+							Element hitElem = findElementByFaceOpenGlName(openGlName);
+							boolean hitIsPartOfMultiSelection = viewportGroupMoveEnabled
+									&& hitElem != null
+									&& currentProject.SelectedElements != null
+									&& currentProject.SelectedElements.size() > 1
+									&& currentProject.SelectedElements.contains(hitElem);
+
+							if (hitIsPartOfMultiSelection) {
+								int faceIndex = findFaceIndexByOpenGlName(hitElem, openGlName);
+								if (faceIndex >= 0) hitElem.setSelectedFace(faceIndex);
+								// Keep multi-selection, only change the lead/active element
+								currentProject.tree.setLeadSelectionElement(hitElem, true);
+								currentProject.SelectedElement = currentProject.tree.getSelectedElement();
+								currentProject.SelectedElements = new ArrayList<Element>(currentProject.tree.getSelectedElements());
 							} else {
-								currentProject.selectElementByOpenGLName(openGlName);
+								// Cube + Keyframe: select element. Face: select element + face.
+								if (currentRightTab == 1) {
+									currentProject.selectElementAndFaceByOpenGLName(openGlName);
+								} else {
+									currentProject.selectElementByOpenGLName(openGlName);
+								}
 							}
 							SwingUtilities.invokeLater(new Runnable() {
 								@Override
@@ -859,6 +1343,15 @@ public static boolean renderAttachmentPoints;
 
 			viewportMarqueeActive = false;
 			modelrenderer.setViewportMarquee(false, 0, 0, 0, 0);
+
+			viewportGizmoDragActive = false;
+			viewportGizmoDragMode = 0;
+			viewportGizmoUseRayConstraint = false;
+			viewportGizmoElems = null;
+			viewportGizmoBaseY = null;
+			viewportGizmoBaseX = null;
+			viewportGizmoBaseZ = null;
+			viewportGizmoSkipSelection = false;
 
 			grabbedElem = null;
 			
@@ -888,12 +1381,212 @@ public static boolean renderAttachmentPoints;
 			return;
 		}
 
-		// Update marquee rectangle while dragging
-		if (viewportMarqueeActive && grabbing && mouseDownOnCenterPanel) {
-			marqueeCurX = Mouse.getX();
-			marqueeCurY = Mouse.getY();
-			modelrenderer.setViewportMarquee(true, marqueeStartX, marqueeStartY, marqueeCurX, marqueeCurY);
-		}
+			// Update marquee rectangle while dragging
+			if (viewportMarqueeActive && grabbing && mouseDownOnCenterPanel) {
+				marqueeCurX = Mouse.getX();
+				marqueeCurY = Mouse.getY();
+				modelrenderer.setViewportMarquee(true, marqueeStartX, marqueeStartY, marqueeCurX, marqueeCurY);
+			}
+
+			// Viewport move gizmo drag (axis handles + center free-move)
+			if (grabbing && viewportGizmoDragActive && mouseDownOnCenterPanel && mouseDownButton == 0 && Mouse.isButtonDown(0) && viewportGizmoElems != null)
+			{
+				int newMouseX = Mouse.getX();
+				int newMouseY = Mouse.getY();
+				int dx = newMouseX - lastMouseX;
+				int dy = newMouseY - lastMouseY;
+
+				if (dx != 0 || dy != 0)
+				{
+					ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+					double moveX = 0, moveY = 0, moveZ = 0;
+
+								// Axis-only mode: move strictly along world axes (X/Y/Z) with NO leakage into other axes.
+								// Use ray-to-axis constraint when possible; otherwise fall back to a stable absolute screen-projected delta.
+								if (!viewportFreedomModeEnabled
+										&& (viewportGizmoDragMode == 1 || viewportGizmoDragMode == 2 || viewportGizmoDragMode == 3)
+										&& viewportGizmoBaseX != null && viewportGizmoBaseY != null && viewportGizmoBaseZ != null)
+								{
+									double delta = 0;
+									boolean haveDelta = false;
+
+									if (viewportGizmoUseRayConstraint) {
+										Double tcur = computeAxisParamFromMouse(newMouseX, newMouseY);
+										if (tcur != null && Double.isFinite(tcur)) {
+											delta = tcur - viewportGizmoAxisParamStart;
+											haveDelta = true;
+										}
+									}
+
+									if (!haveDelta) {
+										// Absolute from drag start (prevents accumulation drift).
+										int ddx = newMouseX - mouseDownX;
+										int ddy = newMouseY - mouseDownY;
+										delta = (ddx * viewportGizmoAxisDirX + ddy * viewportGizmoAxisDirY) / 20.0;
+										haveDelta = true;
+									}
+
+									if (haveDelta) {
+										for (Element e : viewportGizmoElems) {
+											if (e == null) continue;
+											Double bx = viewportGizmoBaseX.get(e);
+											Double by = viewportGizmoBaseY.get(e);
+											Double bz = viewportGizmoBaseZ.get(e);
+											if (bx == null || by == null || bz == null) continue;
+
+																				AnimFrameElement kf = (viewportGizmoDragInKeyframeMode && viewportGizmoKeyframeElems != null) ? viewportGizmoKeyframeElems.get(e) : null;
+
+																	// IMPORTANT:
+																	// StartX/StartY/StartZ are applied BEFORE the element's rotation (see Element.draw()),
+																	// so for rotated elements (or rotated parents) a pure local X/Z move will drift in world Y.
+																	// Convert the desired WORLD-axis delta into the element's local Start delta.
+																	double[] map = viewportGizmoWorldAxisToLocal != null ? viewportGizmoWorldAxisToLocal.get(e) : null;
+																	if (map == null || map.length < 9) {
+																		// Fallback: no mapping available, behave like legacy.
+																		switch (viewportGizmoDragMode) {
+																			case 1:
+																					if (kf != null) { kf.setOffsetX(bx + delta); kf.setOffsetY(by); kf.setOffsetZ(bz); }
+																					else { e.setStartX(bx + delta); e.setStartY(by); e.setStartZ(bz); }
+																					break;
+																			case 2:
+																			{
+																				double ny = by + delta;
+																				if (viewportFloorSnapEnabled && ny < by) ny = by;
+																				if (kf != null) { kf.setOffsetX(bx); kf.setOffsetY(ny); kf.setOffsetZ(bz); } else { e.setStartX(bx); e.setStartY(ny); e.setStartZ(bz); }
+																				break;
+																			}
+																			case 3:
+																					if (kf != null) { kf.setOffsetX(bx); kf.setOffsetY(by); kf.setOffsetZ(bz + delta); }
+																					else { e.setStartX(bx); e.setStartY(by); e.setStartZ(bz + delta); }
+																					break;
+																			default: break;
+																		}
+																	} else {
+																		double ldx = 0, ldy = 0, ldz = 0;
+																		switch (viewportGizmoDragMode) {
+																			case 1: // WORLD X
+																				ldx = map[0] * delta; ldy = map[1] * delta; ldz = map[2] * delta; break;
+																			case 2: // WORLD Y
+																				ldx = map[3] * delta; ldy = map[4] * delta; ldz = map[5] * delta; break;
+																			case 3: // WORLD Z
+																				ldx = map[6] * delta; ldy = map[7] * delta; ldz = map[8] * delta; break;
+																			default: break;
+																		}
+
+																		double nx = bx + ldx;
+																		double ny = by + ldy;
+																		double nz = bz + ldz;
+
+																		// Optional floor snap: prevent going below the starting local Y when dragging WORLD Y downward.
+																		// This keeps existing behavior and avoids surprising sideways clamps for X/Z drags.
+																		if (viewportGizmoDragMode == 2 && viewportFloorSnapEnabled && ny < by) {
+																			ny = by;
+																		}
+
+																		if (kf != null) { kf.setOffsetX(nx); kf.setOffsetY(ny); kf.setOffsetZ(nz); }
+																					else { e.setStartX(nx); e.setStartY(ny); e.setStartZ(nz); }
+																	}
+										}
+
+										updateValues(null);
+										lastMouseX = newMouseX;
+										lastMouseY = newMouseY;
+										return;
+									}
+								}
+
+								// Freedom mode: camera-relative movement (legacy behavior).
+								if (viewportFreedomModeEnabled) {
+									switch (viewportGizmoDragMode) {
+										case 1: // X (camera-right on ground)
+										{
+											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+											moveX = s * viewportGizmoFreeRightX;
+											moveZ = s * viewportGizmoFreeRightZ;
+											break;
+										}
+										case 2: // Y (world up)
+										{
+											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+											moveY = s;
+											break;
+										}
+										case 3: // Z (camera-forward on ground)
+										{
+											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+											// Camera-forward on XZ plane is perpendicular to camera-right.
+											double forwardX = -viewportGizmoFreeRightZ;
+											double forwardZ = viewportGizmoFreeRightX;
+											moveX = s * forwardX;
+											moveZ = s * forwardZ;
+											break;
+										}
+										case 4: // FREE (camera-right + world up)
+										{
+											double sx = dx / 20.0;
+											double sy = dy / 20.0;
+											moveX = sx * viewportGizmoFreeRightX + sy * viewportGizmoFreeUpX;
+											moveY = sx * viewportGizmoFreeRightY + sy * viewportGizmoFreeUpY;
+											moveZ = sx * viewportGizmoFreeRightZ + sy * viewportGizmoFreeUpZ;
+											break;
+										}
+										default: break;
+									}
+								}
+
+					for (Element e : viewportGizmoElems)
+					{
+						if (e == null) continue;
+
+						AnimFrameElement kf = (viewportGizmoDragInKeyframeMode && viewportGizmoKeyframeElems != null) ? viewportGizmoKeyframeElems.get(e) : null;
+						if (kf != null) {
+							if (moveX != 0) kf.setOffsetX(kf.getOffsetX() + moveX);
+							if (moveZ != 0) kf.setOffsetZ(kf.getOffsetZ() + moveZ);
+
+							double applyY = moveY;
+							if (applyY != 0)
+							{
+								if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
+									Double baseY = viewportGizmoBaseY.get(e);
+									if (baseY != null) {
+										double curY = kf.getOffsetY();
+										if (curY + applyY < baseY) {
+											applyY = baseY - curY;
+										}
+									}
+								}
+								kf.setOffsetY(kf.getOffsetY() + applyY);
+							}
+						} else {
+							if (moveX != 0) e.addStartX(moveX);
+							if (moveZ != 0) e.addStartZ(moveZ);
+
+							double applyY = moveY;
+							if (applyY != 0)
+							{
+								if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
+									Double baseY = viewportGizmoBaseY.get(e);
+									if (baseY != null) {
+										double curY = e.getStartY();
+										if (curY + applyY < baseY) {
+											applyY = baseY - curY;
+										}
+									}
+								}
+								e.addStartY(applyY);
+							}
+						}
+					}
+
+					
+updateValues(null);
+				}
+
+				lastMouseX = newMouseX;
+				lastMouseY = newMouseY;
+				return;
+			}
 		
 		if (leftControl)
 		{	
@@ -902,9 +1595,24 @@ public static boolean renderAttachmentPoints;
 				int openGlName = getElementGLNameAtPos(Mouse.getX(), Mouse.getY());
 				if (openGlName >= 0)
 				{
-					currentProject.selectElementAndFaceByOpenGLName(openGlName);
-					grabbedElem = rightTopPanel.getCurrentElement();
-					currentProject.selectElement(grabbedElem);
+					Element hitElem = findElementByFaceOpenGlName(openGlName);
+					boolean hitIsPartOfMultiSelection = viewportGroupMoveEnabled
+							&& hitElem != null
+							&& currentProject.SelectedElements != null
+							&& currentProject.SelectedElements.size() > 1
+							&& currentProject.SelectedElements.contains(hitElem);
+
+					if (hitIsPartOfMultiSelection) {
+						// Don't clear selection: just make the hit element the active one and set face.
+						int faceIndex = findFaceIndexByOpenGlName(hitElem, openGlName);
+						if (faceIndex >= 0) hitElem.setSelectedFace(faceIndex);
+						currentProject.SelectedElement = hitElem;
+						grabbedElem = hitElem;
+					} else {
+						currentProject.selectElementAndFaceByOpenGLName(openGlName);
+						grabbedElem = rightTopPanel.getCurrentElement();
+						currentProject.selectElement(grabbedElem);
+					}
 					SwingUtilities.invokeLater(new Runnable() {
 						@Override
 						public void run() { updateValues(null); } 
@@ -923,28 +1631,56 @@ public static boolean renderAttachmentPoints;
 				int newMouseX = Mouse.getX();
 				int newMouseY = Mouse.getY();
 
-				int xMovement = (int) ((newMouseX - lastMouseX) / 20);
-				int yMovement = (int) ((newMouseY - lastMouseY) / 20);
+				double xMovement = ((double)(newMouseX - lastMouseX)) / 20.0;
+				double yMovement = ((double)(newMouseY - lastMouseY)) / 20.0;
 
-				if (xMovement != 0 | yMovement != 0)
+				if (xMovement != 0 || yMovement != 0)
 				{				
 					if (Mouse.isButtonDown(0))
 					{
-						switch (index) {
-							case 0: // N
-							case 2: // S
-								element.addStartZ(xMovement);
-								break;
-							
-							case 1: // E
-							case 3: // W
-								element.addStartX(xMovement);
-								break;
-							
-							case 4:
-							case 5:
-								element.addStartY(yMovement);
-								break;
+								// Group move (optional): move selected root elements together (avoid double-moving children).
+								java.util.List<Element> elemsToMove;
+								if (viewportGroupMoveEnabled
+										&& currentProject.SelectedElements != null
+										&& currentProject.SelectedElements.size() > 1)
+								{
+									java.util.HashSet<Element> selected = new java.util.HashSet<Element>(currentProject.SelectedElements);
+									elemsToMove = new java.util.ArrayList<Element>();
+									for (Element e : currentProject.SelectedElements) {
+										if (e == null) continue;
+										boolean hasSelectedAncestor = false;
+										Element p = e.ParentElement;
+										while (p != null) {
+											if (selected.contains(p)) { hasSelectedAncestor = true; break; }
+											p = p.ParentElement;
+										}
+										if (!hasSelectedAncestor) elemsToMove.add(e);
+									}
+									if (elemsToMove.isEmpty()) {
+										elemsToMove = java.util.Collections.singletonList(element);
+									}
+								} else {
+									elemsToMove = java.util.Collections.singletonList(element);
+								}
+
+						for (Element e : elemsToMove) {
+							if (e == null) continue;
+							switch (index) {
+								case 0: // N
+								case 2: // S
+									e.addStartZ(xMovement);
+									break;
+								
+								case 1: // E
+								case 3: // W
+									e.addStartX(xMovement);
+									break;
+								
+								case 4:
+								case 5:
+									e.addStartY(yMovement);
+									break;
+							}
 						}
 					}
 					else if (Mouse.isButtonDown(1))
@@ -974,15 +1710,15 @@ public static boolean renderAttachmentPoints;
 						}
 					}
 
-					if (xMovement != 0) {
-						lastMouseX = newMouseX;
-					}
-					if (yMovement != 0) {
-						lastMouseY = newMouseY;
-					}
+					// Smooth movement: always advance last mouse position
+					lastMouseX = newMouseX;
+					lastMouseY = newMouseY;
 					
 					updateValues(null);
-					element.updateUV();
+					// Only resizing affects UV layout. Simple translation does not need to update UVs.
+					if (Mouse.isButtonDown(1)) {
+						element.updateUV();
+					}
 				}
 			}
 		}
@@ -1079,6 +1815,59 @@ public static boolean renderAttachmentPoints;
 			return name;
 		}
 
+		return -1;
+	}
+
+	/**
+	 * Finds the element that owns the given OpenGL face id.
+	 * This is used for viewport interactions where we want to avoid clearing an existing multi-selection.
+	 */
+	private Element findElementByFaceOpenGlName(int openGlName)
+	{
+		if (currentProject == null || currentProject.rootElements == null) return null;
+		return findElementByFaceOpenGlName(openGlName, currentProject.rootElements);
+	}
+
+	private Element findElementByFaceOpenGlName(int openGlName, java.util.List<Element> elems)
+	{
+		if (elems == null) return null;
+		for (Element elem : elems) {
+			if (elem == null) continue;
+			// Check this element's faces
+			Face[] faces = elem.getAllFaces();
+			if (faces != null) {
+				for (int i = 0; i < faces.length; i++) {
+					if (faces[i] != null && faces[i].openGlName == openGlName) {
+						return elem;
+					}
+				}
+			}
+			// Recurse children
+			Element hit = findElementByFaceOpenGlName(openGlName, elem.ChildElements);
+			if (hit != null) return hit;
+			hit = findElementByFaceOpenGlName(openGlName, elem.StepChildElements);
+			if (hit != null) return hit;
+
+			// Recurse into attachment point step children (these can also be selectable)
+			if (elem.AttachmentPoints != null) {
+				for (AttachmentPoint ap : elem.AttachmentPoints) {
+					if (ap == null || ap.StepChildElements == null) continue;
+					hit = findElementByFaceOpenGlName(openGlName, ap.StepChildElements);
+					if (hit != null) return hit;
+				}
+			}
+		}
+		return null;
+	}
+
+	private int findFaceIndexByOpenGlName(Element elem, int openGlName)
+	{
+		if (elem == null) return -1;
+		Face[] faces = elem.getAllFaces();
+		if (faces == null) return -1;
+		for (int i = 0; i < faces.length; i++) {
+			if (faces[i] != null && faces[i].openGlName == openGlName) return i;
+		}
 		return -1;
 	}
 
@@ -1187,6 +1976,11 @@ public static boolean renderAttachmentPoints;
 
 	public void setSidebar(LeftSidebar s)
 	{
+		// During startup, RightPanel.initComponents() may call this before modelrenderer is constructed.
+		if (modelrenderer == null) {
+			pendingLeftSidebar = s;
+			return;
+		}
 		modelrenderer.renderedLeftSidebar = s;
 		if (s != null) s.Load();
 	}

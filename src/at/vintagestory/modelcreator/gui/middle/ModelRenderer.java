@@ -5,8 +5,11 @@ import static org.lwjgl.opengl.GL11.*;
 import java.awt.Point;
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 
 import org.lwjgl.input.Mouse;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.util.glu.GLU;
 import org.newdawn.slick.Color;
@@ -18,6 +21,8 @@ import at.vintagestory.modelcreator.gui.left.LeftSidebar;
 import at.vintagestory.modelcreator.interfaces.IDrawable;
 import at.vintagestory.modelcreator.interfaces.IElementManager;
 import at.vintagestory.modelcreator.model.Element;
+import at.vintagestory.modelcreator.model.AnimationFrame;
+import at.vintagestory.modelcreator.model.AnimFrameElement;
 import org.lwjgl.util.glu.Sphere;
 
 public class ModelRenderer
@@ -33,6 +38,9 @@ public class ModelRenderer
 	public boolean renderDropTagets = false;
 	public Point dropLocation;
 
+	// Viewport toolbar (top right)
+	// (Viewport toolbar removed: move scope toggle lives in the left sidebar now.)
+
 	// Viewport marquee selection (Shift + drag in 3D viewport)
 	public boolean viewportMarqueeActive = false;
 	public int viewportMarqueeX1, viewportMarqueeY1, viewportMarqueeX2, viewportMarqueeY2;
@@ -46,6 +54,227 @@ public class ModelRenderer
 	}
 
 
+	
+// Screen-aligned translate gizmo (overlay)
+public boolean viewportMoveGizmoVisible = false;
+// Center in window coordinates (origin bottom-left, same as Mouse.getY()).
+// Keep both float (for stable drawing) and int (for hit-testing).
+public float viewportMoveGizmoCenterXf = 0;
+public float viewportMoveGizmoCenterYf = 0;
+public int viewportMoveGizmoCenterX = 0;
+public int viewportMoveGizmoCenterY = 0;
+// Layout sizes (pixels)
+public int viewportMoveGizmoAxisLen = 110;
+public int viewportMoveGizmoAxisThick = 10;
+public int viewportMoveGizmoCenterRadius = 18;
+// World-space anchor (center of selection bounds)
+public float viewportMoveGizmoWorldX;
+public float viewportMoveGizmoWorldY;
+public float viewportMoveGizmoWorldZ;
+
+// Cached matrices/viewport from the 3D pass so we can project axes for world-axis mode
+private final FloatBuffer viewportMoveGizmoModelMat = BufferUtils.createFloatBuffer(16);
+private final FloatBuffer viewportMoveGizmoProjMat = BufferUtils.createFloatBuffer(16);
+// LWJGL BufferChecks requires capacity >= 16 for glGetInteger(), even though GL_VIEWPORT returns 4 values.
+// We only use the first 4 ints.
+private final IntBuffer viewportMoveGizmoViewport = BufferUtils.createIntBuffer(16);
+
+// Scratch buffers for unproject (avoid per-call allocations)
+private final FloatBuffer viewportMoveGizmoUnprojNear = BufferUtils.createFloatBuffer(3);
+private final FloatBuffer viewportMoveGizmoUnprojFar = BufferUtils.createFloatBuffer(3);
+
+// Last known good axis directions (window space, origin bottom-left) to avoid jitter when projection degenerates
+private final double[] viewportMoveGizmoLastAxisDirX = new double[] {0, 1, 0, -1};
+private final double[] viewportMoveGizmoLastAxisDirY = new double[] {0, 0, 1, 0};
+
+	/** Returns a normalized 2D direction in window coordinates (origin bottom-left). */
+	
+/** Returns a normalized 2D direction in window coordinates (origin bottom-left). */
+public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
+	if (!viewportMoveGizmoVisible) return new double[] {0, 0};
+	if (ModelCreator.viewportFreedomModeEnabled) {
+		switch (mode) {
+			case 1: return new double[] {1, 0};
+			case 2: return new double[] {0, 1};
+			case 3: return new double[] {0, 0}; // Z axis disabled in freedom mode
+			default: return new double[] {0, 0};
+		}
+	}
+
+	// World-axis mode: project world axes into screen space.
+	float x0 = viewportMoveGizmoCenterXf;
+	float y0 = viewportMoveGizmoCenterYf;
+	FloatBuffer winPos = BufferUtils.createFloatBuffer(3);
+
+	// Use a larger delta so we don't fall into tiny-vector precision issues at far zoom.
+	final float delta = 4f;
+
+	viewportMoveGizmoModelMat.rewind();
+	viewportMoveGizmoProjMat.rewind();
+	viewportMoveGizmoViewport.rewind();
+
+	boolean ok;
+	switch (mode) {
+		case 1: // World X
+			ok = GLU.gluProject(viewportMoveGizmoWorldX + delta, viewportMoveGizmoWorldY, viewportMoveGizmoWorldZ,
+					viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, winPos);
+			break;
+		case 2: // World Y
+			ok = GLU.gluProject(viewportMoveGizmoWorldX, viewportMoveGizmoWorldY + delta, viewportMoveGizmoWorldZ,
+					viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, winPos);
+			break;
+		case 3: // World Z
+			ok = GLU.gluProject(viewportMoveGizmoWorldX, viewportMoveGizmoWorldY, viewportMoveGizmoWorldZ + delta,
+					viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, winPos);
+			break;
+		default:
+			return new double[] {0, 0};
+	}
+
+	// If projection fails, keep the last stable direction.
+	if (!ok) {
+		return new double[] { viewportMoveGizmoLastAxisDirX[mode], viewportMoveGizmoLastAxisDirY[mode] };
+	}
+
+	double x1 = winPos.get(0);
+	double y1 = winPos.get(1);
+	double dx = x1 - x0;
+	double dy = y1 - y0;
+	double len = Math.sqrt(dx*dx + dy*dy);
+
+	// When an axis aligns with the view direction, the projection can collapse and "flip".
+	// Clamp by reusing last known good direction instead of falling back to arbitrary constants.
+	if (!Double.isFinite(len) || len < 2.0) {
+		return new double[] { viewportMoveGizmoLastAxisDirX[mode], viewportMoveGizmoLastAxisDirY[mode] };
+	}
+
+	dx /= len;
+	dy /= len;
+	viewportMoveGizmoLastAxisDirX[mode] = dx;
+	viewportMoveGizmoLastAxisDirY[mode] = dy;
+	return new double[] { dx, dy };
+}
+
+	/**
+	 * Returns a world-space mouse ray as {ox, oy, oz, dx, dy, dz}.
+	 * Uses matrices captured in {@link #updateViewportMoveGizmo(int)}.
+	 *
+	 * Mouse coordinates must be in window space with origin bottom-left (LWJGL Mouse.getX/Y).
+	 */
+	public double[] getMouseRayWorld(int mouseX, int mouseY) {
+		// Matrices/viewport are populated during the 3D render pass when the gizmo is updated.
+		viewportMoveGizmoModelMat.rewind();
+		viewportMoveGizmoProjMat.rewind();
+		viewportMoveGizmoViewport.rewind();
+
+		viewportMoveGizmoUnprojNear.clear();
+		viewportMoveGizmoUnprojFar.clear();
+
+		boolean ok1 = GLU.gluUnProject(mouseX, mouseY, 0f,
+				viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, viewportMoveGizmoUnprojNear);
+		// Rewind because GLU reads position from the buffers
+		viewportMoveGizmoModelMat.rewind();
+		viewportMoveGizmoProjMat.rewind();
+		viewportMoveGizmoViewport.rewind();
+		boolean ok2 = GLU.gluUnProject(mouseX, mouseY, 1f,
+				viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, viewportMoveGizmoUnprojFar);
+
+		if (!ok1 || !ok2) return null;
+
+		viewportMoveGizmoUnprojNear.rewind();
+		viewportMoveGizmoUnprojFar.rewind();
+		double ox = viewportMoveGizmoUnprojNear.get(0);
+		double oy = viewportMoveGizmoUnprojNear.get(1);
+		double oz = viewportMoveGizmoUnprojNear.get(2);
+
+		double fx = viewportMoveGizmoUnprojFar.get(0);
+		double fy = viewportMoveGizmoUnprojFar.get(1);
+		double fz = viewportMoveGizmoUnprojFar.get(2);
+
+		double dx = fx - ox;
+		double dy = fy - oy;
+		double dz = fz - oz;
+		double len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+		if (!Double.isFinite(len) || len < 1e-9) return null;
+		dx /= len;
+		dy /= len;
+		dz /= len;
+		return new double[] { ox, oy, oz, dx, dy, dz };
+	}
+
+	/** Hit test in window coordinates (origin bottom-left). Returns 0 none, 1 X, 2 Y, 3 Z, 4 center/free. */
+	public int hitTestViewportMoveGizmo(int mouseX, int mouseY) {
+		if (!viewportMoveGizmoVisible) return 0;
+		int cx = viewportMoveGizmoCenterX;
+		int cy = viewportMoveGizmoCenterY;
+		if (ModelCreator.viewportFreedomModeEnabled && ModelCreator.viewportCenterCircleEnabled) {
+			int r = viewportMoveGizmoCenterRadius + 4;
+			int dx = mouseX - cx;
+			int dy = mouseY - cy;
+			if (dx*dx + dy*dy <= r*r) return 4;
+		}
+
+		int halfT = viewportMoveGizmoAxisThick / 2;
+		int len = viewportMoveGizmoAxisLen;
+		if (ModelCreator.viewportFreedomModeEnabled) {
+			// Horizontal bar (X)
+			if (mouseY >= cy - halfT && mouseY <= cy + halfT && mouseX >= cx - len && mouseX <= cx + len) {
+				return 1;
+			}
+			// Vertical bar (Y)
+			if (mouseX >= cx - halfT && mouseX <= cx + halfT && mouseY >= cy - len && mouseY <= cy + len) {
+				return 2;
+			}
+			return 0;
+		}
+
+		// World-axis mode: project world axes and hit-test distance to their screen-space segments.
+		double bestDist2 = Double.POSITIVE_INFINITY;
+		int bestMode = 0;
+		for (int m = 1; m <= 3; m++) {
+			double[] dir = getViewportMoveGizmoAxisDirWindow(m);
+			double dirx = dir[0];
+			double diry = dir[1];
+			// Segment endpoints
+			double x1 = cx - dirx * len;
+			double y1 = cy - diry * len;
+			double x2 = cx + dirx * len;
+			double y2 = cy + diry * len;
+			double dist2 = distPointToSegmentSquared(mouseX, mouseY, x1, y1, x2, y2);
+			if (dist2 <= (halfT * halfT) && dist2 < bestDist2) {
+				bestDist2 = dist2;
+				bestMode = m;
+			}
+		}
+		return bestMode;
+	}
+
+	private static double distPointToSegmentSquared(double px, double py, double x1, double y1, double x2, double y2) {
+		double vx = x2 - x1;
+		double vy = y2 - y1;
+		double wx = px - x1;
+		double wy = py - y1;
+		double c1 = vx * wx + vy * wy;
+		if (c1 <= 0) {
+			double dx = px - x1;
+			double dy = py - y1;
+			return dx*dx + dy*dy;
+		}
+		double c2 = vx * vx + vy * vy;
+		if (c2 <= c1) {
+			double dx = px - x2;
+			double dy = py - y2;
+			return dx*dx + dy*dy;
+		}
+		double b = c1 / c2;
+		double bx = x1 + b * vx;
+		double by = y1 + b * vy;
+		double dx = px - bx;
+		double dy = py - by;
+		return dx*dx + dy*dy;
+	}
+
+
 	public ModelRenderer(IElementManager manager) {
 		this.manager = manager;
 	}
@@ -53,6 +282,11 @@ public class ModelRenderer
 	public void Render(int leftSidebarWidth, int width, int height, int frameHeight) {
 		this.width = width;
 		this.height = height;
+
+		// Keep viewport gizmo visuals in sync with user preferences
+		viewportMoveGizmoAxisThick = Math.max(1, Math.min(80, ModelCreator.viewportAxisLineThickness));
+		viewportMoveGizmoAxisLen = Math.max(20, Math.min(500, ModelCreator.viewportAxisLineLength));
+		viewportMoveGizmoCenterRadius = Math.max(4, Math.min(80, ModelCreator.viewportCenterCircleRadius));
 
 		glMatrixMode(GL_PROJECTION);
 		glLoadIdentity();
@@ -63,6 +297,9 @@ public class ModelRenderer
 		drawGridAndElements();
 		
 		drawTreadmillGrid();
+
+		// Update screen-space translate gizmo anchor (uses the current 3D matrices)
+		updateViewportMoveGizmo(leftSidebarWidth);
 		
 		glDisable(GL_DEPTH_TEST);
 		glDisable(GL_CULL_FACE);
@@ -77,7 +314,8 @@ public class ModelRenderer
 		glMatrixMode(GL_MODELVIEW);
 		glLoadIdentity();
 
-		renderLeftPane(leftSidebarWidth, frameHeight);
+		renderLeftPane(leftSidebarWidth, frameHeight);	
+		drawViewportMoveGizmoOverlay(leftSidebarWidth);
 		drawCompass();
 		drawViewportMarquee(leftSidebarWidth);
 		
@@ -85,6 +323,8 @@ public class ModelRenderer
 			renderDropTargets(width, height);
 		}
 	}
+
+		// (viewport toolbar removed)
 	
 	
 	public void prepareDraw()
@@ -383,6 +623,260 @@ public class ModelRenderer
 	}
 	
 	
+
+
+	private void updateViewportMoveGizmo(int leftSidebarWidth)
+	{
+		viewportMoveGizmoVisible = false;
+		Project project = ModelCreator.currentProject;
+		if (project == null || project.SelectedElement == null) return;
+		if (ModelCreator.renderAttachmentPoints) return;
+		// Hide in UV/Face tab (this overlay gizmo is for viewport translate)
+		if (ModelCreator.currentRightTab == 1) return;
+
+		List<Element> elems;
+		if (ModelCreator.viewportGroupMoveEnabled && project.SelectedElements != null && project.SelectedElements.size() > 1) {
+			elems = project.SelectedElements;
+		} else {
+			elems = java.util.Collections.singletonList(project.SelectedElement);
+		}
+
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		boolean keyframeTab = (ModelCreator.currentRightTab == 2 && project.SelectedAnimation != null && ModelCreator.leftKeyframesPanel != null && ModelCreator.leftKeyframesPanel.isVisible());
+		AnimationFrame curFrame = null;
+		if (keyframeTab) {
+			int cf = project.SelectedAnimation.currentFrame;
+			if (project.SelectedAnimation.allFrames != null && cf >= 0 && cf < project.SelectedAnimation.allFrames.size()) {
+				curFrame = project.SelectedAnimation.allFrames.get(cf);
+			}
+		}
+
+		for (Element e : elems) {
+			if (e == null) continue;
+
+			double sx = e.getStartX();
+			double sy = e.getStartY();
+			double sz = e.getStartZ();
+
+			if (keyframeTab && curFrame != null) {
+				AnimFrameElement afe = curFrame.GetAnimFrameElementRec(e);
+				if (afe == null) afe = curFrame.GetAnimFrameElementRecByName(e.getName());
+				if (afe != null) {
+					sx = e.getStartX() + afe.getOffsetX();
+					sy = e.getStartY() + afe.getOffsetY();
+					sz = e.getStartZ() + afe.getOffsetZ();
+				}
+			}
+
+			minX = Math.min(minX, sx);
+			minY = Math.min(minY, sy);
+			minZ = Math.min(minZ, sz);
+			maxX = Math.max(maxX, sx + e.getWidth());
+			maxY = Math.max(maxY, sy + e.getHeight());
+			maxZ = Math.max(maxZ, sz + e.getDepth());
+		}
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return;
+
+		float cx = (float)((minX + maxX) / 2.0);
+		float cy = (float)((minY + maxY) / 2.0);
+		float cz = (float)((minZ + maxZ) / 2.0);
+
+		viewportMoveGizmoWorldX = cx;
+		viewportMoveGizmoWorldY = cy;
+		viewportMoveGizmoWorldZ = cz;
+
+		// Project into window coordinates (cache matrices for world-axis projection).
+		viewportMoveGizmoModelMat.clear();
+		viewportMoveGizmoProjMat.clear();
+		glGetFloat(GL_MODELVIEW_MATRIX, viewportMoveGizmoModelMat);
+		glGetFloat(GL_PROJECTION_MATRIX, viewportMoveGizmoProjMat);
+
+		viewportMoveGizmoViewport.clear();
+		GL11.glGetInteger(GL11.GL_VIEWPORT, viewportMoveGizmoViewport);
+		viewportMoveGizmoViewport.rewind();
+
+		FloatBuffer winPos = BufferUtils.createFloatBuffer(3);
+		viewportMoveGizmoModelMat.rewind();
+		viewportMoveGizmoProjMat.rewind();
+		viewportMoveGizmoViewport.rewind();
+		boolean ok = GLU.gluProject(cx, cy, cz, viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, winPos);
+		if (!ok) return;
+
+		float wx = winPos.get(0);
+		float wy = winPos.get(1);
+		float wz = winPos.get(2);
+		viewportMoveGizmoCenterXf = wx;
+		viewportMoveGizmoCenterYf = wy;
+		if (wz < 0f || wz > 1f) return;
+
+		int ix = Math.round(wx);
+		int iy = Math.round(wy);
+
+		if (ix < leftSidebarWidth || ix > width) return;
+		if (iy < 0 || iy > height) return;
+
+		viewportMoveGizmoCenterX = ix;
+		viewportMoveGizmoCenterY = iy;
+		viewportMoveGizmoVisible = true;
+	}
+
+	private void drawViewportMoveGizmoOverlay(int leftSidebarWidth)
+	{
+		if (!viewportMoveGizmoVisible) return;
+		// Do not draw under the left UI
+		if (viewportMoveGizmoCenterX < leftSidebarWidth) return;
+
+		int cx = viewportMoveGizmoCenterX;
+		int cyTop = height - viewportMoveGizmoCenterY; // Ortho is top-left origin
+
+		int len = viewportMoveGizmoAxisLen;
+		int thick = viewportMoveGizmoAxisThick;
+		int halfT = thick / 2;
+		int r = viewportMoveGizmoCenterRadius;
+
+		glPushMatrix();
+		glDisable(GL_TEXTURE_2D);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable(GL_DEPTH_TEST);
+
+		int ah = thick + 6;
+
+		if (ModelCreator.viewportFreedomModeEnabled) {
+			// Freedom mode: screen-aligned handles (camera-relative movement).
+			// X axis (red)
+			glColor4f(1f, 0.25f, 0.25f, 0.92f);
+			glBegin(GL_QUADS);
+			{
+				glVertex2i(cx - len, cyTop - halfT);
+				glVertex2i(cx + len, cyTop - halfT);
+				glVertex2i(cx + len, cyTop + halfT);
+				glVertex2i(cx - len, cyTop + halfT);
+			}
+			glEnd();
+			glBegin(GL_TRIANGLES);
+			{
+				glVertex2i(cx - len - ah, cyTop);
+				glVertex2i(cx - len, cyTop - ah/2);
+				glVertex2i(cx - len, cyTop + ah/2);
+				glVertex2i(cx + len + ah, cyTop);
+				glVertex2i(cx + len, cyTop - ah/2);
+				glVertex2i(cx + len, cyTop + ah/2);
+			}
+			glEnd();
+
+			// Y axis (green)
+			glColor4f(0.25f, 1f, 0.25f, 0.92f);
+			glBegin(GL_QUADS);
+			{
+				glVertex2i(cx - halfT, cyTop - len);
+				glVertex2i(cx + halfT, cyTop - len);
+				glVertex2i(cx + halfT, cyTop + len);
+				glVertex2i(cx - halfT, cyTop + len);
+			}
+			glEnd();
+			glBegin(GL_TRIANGLES);
+			{
+				glVertex2i(cx, cyTop - len - ah);
+				glVertex2i(cx - ah/2, cyTop - len);
+				glVertex2i(cx + ah/2, cyTop - len);
+			}
+			glEnd();
+
+			if (ModelCreator.viewportCenterCircleEnabled) {
+				// Center free-move handle
+				glColor4f(0.15f, 0.15f, 0.15f, 0.80f);
+				glBegin(GL_TRIANGLE_FAN);
+				{
+					glVertex2i(cx, cyTop);
+					int steps = 28;
+					for (int i = 0; i <= steps; i++) {
+						double a = (Math.PI * 2.0) * (i / (double)steps);
+						int px = cx + (int)Math.round(Math.cos(a) * r);
+						int py = cyTop + (int)Math.round(Math.sin(a) * r);
+						glVertex2i(px, py);
+					}
+				}
+				glEnd();
+				glColor4f(0.95f, 0.95f, 1f, 0.70f);
+				glLineWidth(2f);
+				glBegin(GL_LINE_LOOP);
+				{
+					int steps = 32;
+					for (int i = 0; i < steps; i++) {
+						double a = (Math.PI * 2.0) * (i / (double)steps);
+						int px = cx + (int)Math.round(Math.cos(a) * r);
+						int py = cyTop + (int)Math.round(Math.sin(a) * r);
+						glVertex2i(px, py);
+					}
+				}
+				glEnd();
+			}
+		} else {
+			// World-axis mode: draw world X/Y/Z axes projected into screen space.
+			for (int m = 1; m <= 3; m++) {
+				double[] dirWin = getViewportMoveGizmoAxisDirWindow(m);
+				double dirx = dirWin[0];
+				double diry = -dirWin[1]; // convert window(up) -> ortho(down)
+				// Segment endpoints
+				double x1 = cx - dirx * len;
+				double y1 = cyTop - diry * len;
+				double x2 = cx + dirx * len;
+				double y2 = cyTop + diry * len;
+				// Perpendicular for thickness
+				double perpx = -diry;
+				double perpy = dirx;
+				double ox = perpx * halfT;
+				double oy = perpy * halfT;
+
+				switch (m) {
+					case 1: glColor4f(1f, 0.25f, 0.25f, 0.92f); break;
+					case 2: glColor4f(0.25f, 1f, 0.25f, 0.92f); break;
+					case 3: glColor4f(0.25f, 0.55f, 1f, 0.92f); break;
+				}
+
+				glBegin(GL_QUADS);
+				{
+					glVertex2i((int)Math.round(x1 + ox), (int)Math.round(y1 + oy));
+					glVertex2i((int)Math.round(x1 - ox), (int)Math.round(y1 - oy));
+					glVertex2i((int)Math.round(x2 - ox), (int)Math.round(y2 - oy));
+					glVertex2i((int)Math.round(x2 + ox), (int)Math.round(y2 + oy));
+				}
+				glEnd();
+
+				// Arrowheads at both ends
+				int tip2x = (int)Math.round(x2 + dirx * ah);
+				int tip2y = (int)Math.round(y2 + diry * ah);
+				int b21x = (int)Math.round(x2 + perpx * (ah / 2.0));
+				int b21y = (int)Math.round(y2 + perpy * (ah / 2.0));
+				int b22x = (int)Math.round(x2 - perpx * (ah / 2.0));
+				int b22y = (int)Math.round(y2 - perpy * (ah / 2.0));
+				int tip1x = (int)Math.round(x1 - dirx * ah);
+				int tip1y = (int)Math.round(y1 - diry * ah);
+				int b11x = (int)Math.round(x1 + perpx * (ah / 2.0));
+				int b11y = (int)Math.round(y1 + perpy * (ah / 2.0));
+				int b12x = (int)Math.round(x1 - perpx * (ah / 2.0));
+				int b12y = (int)Math.round(y1 - perpy * (ah / 2.0));
+				glBegin(GL_TRIANGLES);
+				{
+					glVertex2i(tip2x, tip2y);
+					glVertex2i(b21x, b21y);
+					glVertex2i(b22x, b22y);
+					glVertex2i(tip1x, tip1y);
+					glVertex2i(b11x, b11y);
+					glVertex2i(b12x, b12y);
+				}
+				glEnd();
+			}
+		}
+
+
+		glDisable(GL_BLEND);
+		glPopMatrix();
+	}
+
 	public void drawCompass() {
 		if (!ModelCreator.showGrid) return;
 		

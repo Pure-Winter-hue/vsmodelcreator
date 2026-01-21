@@ -24,6 +24,12 @@ import org.newdawn.slick.Color;
 
 public class Element implements IDrawable
 {
+	// OpenGL picking ids for the move gizmo (kept far above face ids)
+	public static final int GIZMO_NAME_AXIS_X = 9000001;
+	public static final int GIZMO_NAME_AXIS_Y = 9000002;
+	public static final int GIZMO_NAME_AXIS_Z = 9000003;
+	public static final int GIZMO_NAME_CENTER = 9000004;
+
     /// <summary>
     /// Top, Front/Left, Back/Right, Bottom
     /// </summary>
@@ -419,54 +425,7 @@ public class Element implements IDrawable
 		GL11.glLineWidth(1f);
 		
 
-		if (!ModelCreator.renderAttachmentPoints) {
-			GL11.glPushMatrix();
-			{
-				GL11.glDisable(GL11.GL_DEPTH_TEST);
-				GL11.glTranslated(originX, originY, originZ);
-				GL11.glColor3f(0.25F, 0.25F, 0.25F);
-				sphere.draw(0.2F, 16, 16);
-				rotateAxis();
-				GL11.glBegin(GL_LINES);
-				{
-					// 3 Axes
-					GL11.glColor3f(1, 0, 0);
-					GL11.glVertex3f(-4, 0, 0);
-					GL11.glVertex3f(4, 0, 0);
-					
-					GL11.glVertex3f(4, 0, 0);
-					GL11.glVertex3f(3.6f, 0, 0.4f);
-					GL11.glVertex3f(4, 0, 0);
-					GL11.glVertex3f(3.6f, 0, -0.4f);
-					
-					GL11.glColor3f(0, 1, 0);
-					GL11.glVertex3f(0, -4, 0);
-					GL11.glVertex3f(0, 4, 0);
-					
-					GL11.glVertex3f(0, 4, 0);
-					GL11.glVertex3f(0, 3.6f, 0.4f);
-					
-					GL11.glVertex3f(0, 4, 0);
-					GL11.glVertex3f(0, 3.6f, -0.4f);
-					
-					GL11.glColor3f(0, 0, 1);
-					GL11.glVertex3f(0, 0, -4);
-					GL11.glVertex3f(0, 0, 4);
-					
-					GL11.glVertex3f(0, 0, 4);
-					GL11.glVertex3f(0.4f, 0, 3.6f);
-					
-					GL11.glVertex3f(0, 0, 4);
-					GL11.glVertex3f(-0.4f, 0, 3.6f);
-				}
-				
-				GL11.glEnd();
-				GL11.glEnable(GL11.GL_DEPTH_TEST);
-			}
-			
-			GL11.glPopMatrix();			
-		}
-		
+		// Viewport translate gizmo is now drawn as a screen-aligned overlay in ModelRenderer.
 
 
 		// Cube highlight
@@ -563,6 +522,73 @@ public class Element implements IDrawable
 		}
 		GL11.glPopMatrix();
 		
+	}
+
+	/**
+	 * Draws a small rectangular prism along an axis to provide a generous hitbox
+	 * for OpenGL picking (lines are notoriously hard to click).
+	 */
+	private void drawAxisBoxX(float halfLen, float t)
+	{
+		float x0 = -halfLen, x1 = halfLen;
+		GL11.glBegin(GL11.GL_QUADS);
+		{
+			// +Y
+			GL11.glVertex3f(x0, t, -t); GL11.glVertex3f(x1, t, -t); GL11.glVertex3f(x1, t, t); GL11.glVertex3f(x0, t, t);
+			// -Y
+			GL11.glVertex3f(x0, -t, t); GL11.glVertex3f(x1, -t, t); GL11.glVertex3f(x1, -t, -t); GL11.glVertex3f(x0, -t, -t);
+			// +Z
+			GL11.glVertex3f(x0, -t, t); GL11.glVertex3f(x1, -t, t); GL11.glVertex3f(x1, t, t); GL11.glVertex3f(x0, t, t);
+			// -Z
+			GL11.glVertex3f(x0, t, -t); GL11.glVertex3f(x1, t, -t); GL11.glVertex3f(x1, -t, -t); GL11.glVertex3f(x0, -t, -t);
+			// +X
+			GL11.glVertex3f(x1, -t, -t); GL11.glVertex3f(x1, t, -t); GL11.glVertex3f(x1, t, t); GL11.glVertex3f(x1, -t, t);
+			// -X
+			GL11.glVertex3f(x0, -t, t); GL11.glVertex3f(x0, t, t); GL11.glVertex3f(x0, t, -t); GL11.glVertex3f(x0, -t, -t);
+		}
+		GL11.glEnd();
+	}
+
+	private void drawAxisBoxY(float halfLen, float t)
+	{
+		float y0 = -halfLen, y1 = halfLen;
+		GL11.glBegin(GL11.GL_QUADS);
+		{
+			// +X
+			GL11.glVertex3f(t, y0, -t); GL11.glVertex3f(t, y1, -t); GL11.glVertex3f(t, y1, t); GL11.glVertex3f(t, y0, t);
+			// -X
+			GL11.glVertex3f(-t, y0, t); GL11.glVertex3f(-t, y1, t); GL11.glVertex3f(-t, y1, -t); GL11.glVertex3f(-t, y0, -t);
+			// +Z
+			GL11.glVertex3f(-t, y0, t); GL11.glVertex3f(-t, y1, t); GL11.glVertex3f(t, y1, t); GL11.glVertex3f(t, y0, t);
+			// -Z
+			GL11.glVertex3f(t, y0, -t); GL11.glVertex3f(t, y1, -t); GL11.glVertex3f(-t, y1, -t); GL11.glVertex3f(-t, y0, -t);
+			// +Y
+			GL11.glVertex3f(-t, y1, -t); GL11.glVertex3f(t, y1, -t); GL11.glVertex3f(t, y1, t); GL11.glVertex3f(-t, y1, t);
+			// -Y
+			GL11.glVertex3f(-t, y0, t); GL11.glVertex3f(t, y0, t); GL11.glVertex3f(t, y0, -t); GL11.glVertex3f(-t, y0, -t);
+		}
+		GL11.glEnd();
+	}
+
+	private void drawAxisBoxZ(float halfLen, float t)
+	{
+		float z0 = -halfLen, z1 = halfLen;
+		GL11.glBegin(GL11.GL_QUADS);
+		{
+			// +X
+			GL11.glVertex3f(t, -t, z0); GL11.glVertex3f(t, -t, z1); GL11.glVertex3f(t, t, z1); GL11.glVertex3f(t, t, z0);
+			// -X
+			GL11.glVertex3f(-t, t, z0); GL11.glVertex3f(-t, t, z1); GL11.glVertex3f(-t, -t, z1); GL11.glVertex3f(-t, -t, z0);
+			// +Y
+			GL11.glVertex3f(-t, t, z0); GL11.glVertex3f(t, t, z0); GL11.glVertex3f(t, t, z1); GL11.glVertex3f(-t, t, z1);
+			// -Y
+			GL11.glVertex3f(-t, -t, z1); GL11.glVertex3f(t, -t, z1); GL11.glVertex3f(t, -t, z0); GL11.glVertex3f(-t, -t, z0);
+			// +Z
+			GL11.glVertex3f(-t, -t, z1); GL11.glVertex3f(-t, t, z1); GL11.glVertex3f(t, t, z1); GL11.glVertex3f(t, -t, z1);
+			// -Z
+			GL11.glVertex3f(t, -t, z0); GL11.glVertex3f(t, t, z0); GL11.glVertex3f(-t, t, z0); GL11.glVertex3f(-t, -t, z0);
+		}
+		GL11.glEnd();
 	}
 
 

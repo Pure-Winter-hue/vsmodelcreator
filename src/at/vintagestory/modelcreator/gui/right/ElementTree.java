@@ -293,6 +293,71 @@ public class ElementTree
 			}
 		}
 	}
+
+	/**
+	 * Select all element nodes (including those inside collapsed branches).
+	 *
+	 * Note: JTree selection operates on TreePaths, so walk the full tree model
+	 * rather than using row indices (which would only include visible rows).
+	 */
+	public void selectAllElements()
+	{
+		// Preserve previous lead selection when possible
+		TreePath prevLead = jtree.getLeadSelectionPath();
+		Object prevLeadObj = null;
+		if (prevLead != null && prevLead.getLastPathComponent() instanceof DefaultMutableTreeNode) {
+			prevLeadObj = ((DefaultMutableTreeNode)prevLead.getLastPathComponent()).getUserObject();
+		}
+
+		jtree.clearSelection();
+
+		TreePath firstPath = null;
+		TreePath leadPath = null;
+
+		@SuppressWarnings("unchecked")
+		Enumeration<TreeNode> enumer = rootNode.breadthFirstEnumeration();
+		while (enumer.hasMoreElements()) {
+			DefaultMutableTreeNode node = (DefaultMutableTreeNode)enumer.nextElement();
+			Object obj = node.getUserObject();
+			if (!(obj instanceof Element)) continue;
+
+			TreePath path = new TreePath(node.getPath());
+			jtree.addSelectionPath(path);
+			if (firstPath == null) firstPath = path;
+			if (prevLeadObj != null && prevLeadObj.equals(obj)) {
+				leadPath = path;
+			}
+		}
+
+		if (leadPath == null) leadPath = firstPath;
+		if (leadPath != null) {
+			jtree.setLeadSelectionPath(leadPath);
+			jtree.scrollPathToVisible(leadPath);
+		}
+	}
+
+	/**
+	 * Sets the lead/primary selection to the given element without clearing existing selection.
+	 * Useful for viewport multi-select workflows where you want to transform a group but
+	 * still change which element is considered the "active" one.
+	 */
+	public void setLeadSelectionElement(Element elem, boolean ensureSelected)
+	{
+		if (elem == null) return;
+		Enumeration<TreeNode> enumer = rootNode.breadthFirstEnumeration();
+		while (enumer.hasMoreElements()) {
+			DefaultMutableTreeNode node = (DefaultMutableTreeNode)enumer.nextElement();
+			if (node.getUserObject().equals(elem)) {
+				TreePath path = new TreePath(node.getPath());
+				if (ensureSelected && !jtree.isPathSelected(path)) {
+					jtree.addSelectionPath(path);
+				}
+				jtree.setLeadSelectionPath(path);
+				jtree.scrollPathToVisible(path);
+				break;
+			}
+		}
+	}
 	
 	public void selectElementByOpenGLName(int opengglname) {
 		jtree.clearSelection();

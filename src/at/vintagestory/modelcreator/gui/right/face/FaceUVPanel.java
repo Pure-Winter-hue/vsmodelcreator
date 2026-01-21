@@ -259,20 +259,18 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 	public void updateValues(JComponent byGuiElem)
 	{
 		Element cube = manager.getCurrentElement();
+		Face face = cube == null ? null : cube.getSelectedFace();
 		
-		if (cube != null)
+		if (cube != null && face != null)
 		{
 			uStartField.setEnabled(true);
 			vStartField.setEnabled(true);
 			uEndField.setEnabled(true);
 			vEndField.setEnabled(true);
-			if (byGuiElem != uStartField) uStartField.setText(df.format(cube.getSelectedFace().getStartU()));
-			if (byGuiElem != vStartField) vStartField.setText(df.format(cube.getSelectedFace().getStartV()));
-			if (byGuiElem != uEndField) uEndField.setText(df.format(cube.getSelectedFace().getEndU()));
-			if (byGuiElem != vEndField) vEndField.setText(df.format(cube.getSelectedFace().getEndV()));
-			
-			
-
+			if (byGuiElem != uStartField) uStartField.setText(df.format(face.getStartU()));
+			if (byGuiElem != vStartField) vStartField.setText(df.format(face.getStartV()));
+			if (byGuiElem != uEndField) uEndField.setText(df.format(face.getEndU()));
+			if (byGuiElem != vEndField) vEndField.setText(df.format(face.getEndV()));
 		}
 		else
 		{
@@ -293,6 +291,7 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 		Element cube = manager.getCurrentElement();
 		if (cube == null) return;
 		Face face = cube.getSelectedFace();
+		if (face == null) return;
 		
 		double size = direction * ((modifiers & ActionEvent.SHIFT_MASK) == 1 ? 0.1f : 1f);
 		

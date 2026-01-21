@@ -143,10 +143,11 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 			
 			if (tabbedPane.getSelectedIndex() == 1)
 			{
-				creator.setSidebar(creator.uvSidebar);
+				if (creator.uvSidebar != null) creator.setSidebar(creator.uvSidebar);
 				
 			} else {
-				creator.setSidebar(null);
+				// Default 3D viewport tools sidebar (move scope, floor snap, ...)
+				if (creator.viewportSidebar != null) creator.setSidebar(creator.viewportSidebar);
 			}
 			
 			boolean keyframeMode = tabbedPane.getSelectedIndex() == 2;
@@ -168,7 +169,21 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 			ModelCreator.ignoreValueUpdates = false;
 		});
 		
-		add(tabbedPane);
+
+		// Ensure the correct left sidebar is visible on startup.
+// RightPanel is created before ModelCreator finishes constructing all left sidebars,
+// so defer this until after the UI has finished initializing.
+SwingUtilities.invokeLater(() -> {
+	if (tabbedPane.getSelectedIndex() == 1) {
+		if (creator.uvSidebar != null) creator.setSidebar(creator.uvSidebar);
+	} else {
+		// Default 3D viewport tools sidebar (move scope, floor snap, ...)
+		if (creator.viewportSidebar != null) creator.setSidebar(creator.viewportSidebar);
+	}
+	creator.revalidate();
+	creator.repaint();
+});
+add(tabbedPane);
 		setLayout(dy);
 		revalidate();
 	}

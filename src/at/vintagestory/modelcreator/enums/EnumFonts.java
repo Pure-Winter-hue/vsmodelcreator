@@ -11,6 +11,7 @@ import at.vintagestory.modelcreator.ModelCreator;
 public enum EnumFonts
 {
 	BEBAS_NEUE_12("bebas_neue.otf", 12),
+	BEBAS_NEUE_16("bebas_neue.otf", 16),
 	BEBAS_NEUE_20("bebas_neue.otf", 20), 
 	BEBAS_NEUE_50("bebas_neue.otf", 50),
 	BEBAS_NEUE_75("bebas_neue.otf", 75);

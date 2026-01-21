@@ -390,21 +390,38 @@ public class FacePropertiesPanel extends JPanel implements IValueUpdater
 		{
 			Face face = cube.getSelectedFace();
 			
+			// It is possible to have an active element without a selected face.
+			// This can happen after multi-selection operations or when switching tabs.
+			// Avoid crashing the UI thread by gracefully disabling face-specific controls.
+			boolean hasFace = (face != null);
+			boxEnabled.setEnabled(hasFace);
+			boxAutoUV.setEnabled(hasFace);
+			boxSnapUv.setEnabled(hasFace);
+			glowValue.setEnabled(hasFace);
+			for (int i = 0; i < 4; i++) windModeList[i].setEnabled(hasFace);
+			reflectiveMode.setEnabled(hasFace);
+			
+			if (!hasFace) {
+				// Clear display values
+				windData.setText("");
+				return;
+			}
+			
 			boxEnabled.setSelected(face.isEnabled());
 			boxAutoUV.setSelected(face.isAutoUVEnabled());
 			boxSnapUv.setSelected(face.isSnapUvEnabled());
-			if (byGuiElem != glowValue) glowValue.setText(""+face.getGlow());
+			if (byGuiElem != glowValue) glowValue.setText("" + face.getGlow());
 			
 			for (int i = 0; i < 4; i++) {
 				if (face.WindModes == null) {
 					windModeList[i].setSelectedIndex(0);
-				} else {				
+				} else {
 					windModeList[i].setSelectedIndex(face.WindModes[i] + 1);
 				}
 			}
 			
 			if (face.WindData != null) {
-				String windDataStr = face.WindData[0]+","+face.WindData[1]+","+face.WindData[2]+","+face.WindData[3];
+				String windDataStr = face.WindData[0] + "," + face.WindData[1] + "," + face.WindData[2] + "," + face.WindData[3];
 				if (windData.getText() != windDataStr) {
 					windData.setText(windDataStr);
 				}
