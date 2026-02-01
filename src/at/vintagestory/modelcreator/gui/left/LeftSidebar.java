@@ -28,6 +28,9 @@ public abstract class LeftSidebar
 	// Prevent collapsing so far that controls overlap
 	private final int SIDEBAR_MIN_WIDTH = 120;
 
+	// Persist per-sidebar width so layouts survive restarts.
+	protected final String sidebarWidthPrefsKey;
+
 	private String title;
 	
 	public int nowSidebarWidth = SIDEBAR_WIDTH;
@@ -50,6 +53,8 @@ public abstract class LeftSidebar
 	public LeftSidebar(String title)
 	{
 		this.title = title;
+		String keySafe = title == null ? "" : title.toLowerCase().replaceAll("[^a-z0-9]+", "");
+		this.sidebarWidthPrefsKey = "leftSidebarWidth_" + keySafe;
 	}
 
 	public void draw(int sidebarWidth, int canvasWidth, int canvasHeight, int frameHeight)
@@ -131,10 +136,29 @@ public abstract class LeftSidebar
 	}
 	
 	public void onResized() {
-		
+		// Save current width as the user drags.
+		try {
+			ModelCreator.prefs.putInt(sidebarWidthPrefsKey, nowSidebarWidth);
+		} catch (Throwable t) {
+			// Preferences can fail on some locked-down systems; ignore.
+		}
 	}
 	
 	public void Load() {
-		
+		// Restore preferred width.
+		try {
+			int saved = ModelCreator.prefs.getInt(sidebarWidthPrefsKey, nowSidebarWidth);
+			nowSidebarWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(saved, ModelCreator.Instance.canvWidth - 1));
+		} catch (Throwable t) {
+			// Ignore preference read failures.
+		}
+	}
+
+	/**
+	 * Give the sidebar first dibs on mouse wheel events (e.g. scrolling a long list).
+	 * Return true if handled.
+	 */
+	public boolean handleMouseWheel(int dWheel, int mouseX, int mouseY, int canvasHeight) {
+		return false;
 	}
 }

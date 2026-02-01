@@ -28,7 +28,12 @@ public class FaceToolsPanel extends JPanel implements IValueUpdater
 		this.manager = manager;
 		setLayout(new GridLayout(2, 1, 0, 2));
 		setBorder(BorderFactory.createTitledBorder(Start.Border, "<html><b>Tools</b></html>"));
-		setMaximumSize(new Dimension(186, 90));
+		// In the UV tab the parent uses a BoxLayout. A plain JPanel has a huge max height, so BoxLayout
+		// stretches it to fill the remaining space, turning these two buttons into skyscrapers.
+		// Cap the height to something reasonable so buttons stay "normal" sized.
+		Dimension pref = new Dimension(10, 95);
+		setPreferredSize(pref);
+		setMaximumSize(new Dimension(Integer.MAX_VALUE, pref.height));
 
 		btnFlipUvLR = new JButton("Flip UV (L/R)");
 		btnFlipUvLR.setToolTipText("<html>Flips the selected face UV horizontally by swapping U start/end.<br>Also disables Auto UV for this face so the change persists.</html>");

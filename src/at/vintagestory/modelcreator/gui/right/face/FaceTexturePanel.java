@@ -36,7 +36,8 @@ public class FaceTexturePanel extends JPanel implements ITextureCallback
 		this.manager = manager;
 		setLayout(new GridLayout(2, 2, 4, 4));
 		setBorder(BorderFactory.createTitledBorder(Start.Border, "<html><b>Texture</b></html>"));
-		setMaximumSize(new Dimension(186, 90));
+		// Let the panel expand with the right bar width (prevents clipped button labels)
+		setMaximumSize(new Dimension(Integer.MAX_VALUE, 90));
 		initComponents();
 		addComponents();
 	}

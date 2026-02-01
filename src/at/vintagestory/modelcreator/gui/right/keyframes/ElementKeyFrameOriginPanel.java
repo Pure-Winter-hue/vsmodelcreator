@@ -101,6 +101,9 @@ public class ElementKeyFrameOriginPanel extends JPanel implements IValueUpdater
 				ModelCreator.updateValues(xOriginField);
 			}
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 		xOriginField.addFocusListener(new FocusListenerImpl() {
 			@Override
@@ -137,6 +140,9 @@ public class ElementKeyFrameOriginPanel extends JPanel implements IValueUpdater
 				ModelCreator.updateValues(yOriginField);
 			}
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 		yOriginField.addFocusListener(new FocusListenerImpl() {
 			@Override
@@ -173,6 +179,9 @@ public class ElementKeyFrameOriginPanel extends JPanel implements IValueUpdater
 				ModelCreator.updateValues(zOriginField);
 			}
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 		zOriginField.addFocusListener(new FocusListenerImpl() {
 			@Override

@@ -11,6 +11,9 @@ public class PendingTexture
 	public File textureFile;
 	public ITextureCallback callback;
 	public String ProjectType = "normal"; // "normal", "backdrop", "mountbackdrop"
+
+	// When true, load using Project.loadReferenceTexture() (PNG/JPG) instead of Project.loadTexture() (PNG only).
+	boolean isReferenceImage;
 	
 	boolean doReplaceAll;
 	boolean doReplacedForSelectedElement;
@@ -55,12 +58,18 @@ public class PendingTexture
 				return;
 			}
 			
-			String errormessge = null;			
-			String fileName = this.textureFile.getName().replace(".png", "");
+			String errormessge = null;
+			String fileName = this.textureFile.getName();
+			int dot = fileName.lastIndexOf('.');
+			if (dot > 0) fileName = fileName.substring(0, dot);
 			
 
-			BooleanParam isNew = new BooleanParam();			
-			errormessge = project.loadTexture(textureName, this.textureFile, isNew, ProjectType, doReplaceAll, doReplacedForSelectedElement, insertTextureSizeEntry);
+			BooleanParam isNew = new BooleanParam();
+			if (isReferenceImage) {
+				errormessge = project.loadReferenceTexture(textureName, this.textureFile, isNew, ProjectType);
+			} else {
+				errormessge = project.loadTexture(textureName, this.textureFile, isNew, ProjectType, doReplaceAll, doReplacedForSelectedElement, insertTextureSizeEntry);
+			}
 			
 			if (callback != null) {
 				callback.onTextureLoaded(isNew.Value, errormessge, fileName);
@@ -100,5 +109,10 @@ public class PendingTexture
 	public void SetInsertTextureSizeEntry()
 	{
 		insertTextureSizeEntry=true;		
+	}
+
+	public void SetIsReferenceImage()
+	{
+		isReferenceImage = true;
 	}
 }

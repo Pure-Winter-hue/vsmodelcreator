@@ -81,13 +81,23 @@ public class ElementTree
 					ModelCreator.currentProject.SelectedElements = new java.util.ArrayList<Element>(getSelectedElements());
 					if (ModelCreator.currentProject.SelectedElement != null) {
 						ModelCreator.currentProject.SelectedElement.elementWasSelected();
+
+						// Auto-fix Z-fighting on selection (runs once per selection change, not per frame)
+						if (ModelCreator.autofixZFighting && ModelCreator.currentRightTab == 0) {
+							// Commit so users can see the transform update immediately
+							ModelCreator.currentProject.autoFixZFighting(
+								java.util.Arrays.asList(ModelCreator.currentProject.SelectedElement),
+								ModelCreator.autofixZFightingEpsilon,
+								true
+							);
+						}
 					}
 					ModelCreator.updateValues(jtree);
 					}
 			}	
 		});
 		
-		// does not work, wtf?
+		// does not work, wtf? <- I don't know who left this comment, but I'm scared to remove it, Load bearing comment! -PW
 		jtree.addKeyListener(new KeyListener()
 		{
 			
@@ -114,7 +124,7 @@ public class ElementTree
 			@Override
 			public void keyReleased(KeyEvent e)
 			{
-				// TODO Auto-generated method stub
+				// TODO Auto-generated method stub | PW: <_< 
 				
 			}
 			
@@ -159,7 +169,7 @@ public class ElementTree
 			@Override
 			public void mouseReleased(MouseEvent arg0)
 			{
-				// TODO Auto-generated method stub
+				// TODO Auto-generated method stub PW: <_< 
 				
 			}
 			
@@ -297,7 +307,7 @@ public class ElementTree
 	/**
 	 * Select all element nodes (including those inside collapsed branches).
 	 *
-	 * Note: JTree selection operates on TreePaths, so walk the full tree model
+	 * Note: JTree selection operates on TreePaths, so we walk the full tree model
 	 * rather than using row indices (which would only include visible rows).
 	 */
 	public void selectAllElements()

@@ -23,6 +23,8 @@ import at.vintagestory.modelcreator.interfaces.IElementManager;
 import at.vintagestory.modelcreator.model.Element;
 import at.vintagestory.modelcreator.model.AnimationFrame;
 import at.vintagestory.modelcreator.model.AnimFrameElement;
+import at.vintagestory.modelcreator.util.GameMath;
+import at.vintagestory.modelcreator.util.Mat4f;
 import org.lwjgl.util.glu.Sphere;
 
 public class ModelRenderer
@@ -57,10 +59,13 @@ public class ModelRenderer
 	
 // Screen-aligned translate gizmo (overlay)
 public boolean viewportMoveGizmoVisible = false;
+// True when the shared gizmo pivot (center of selection bounds) is available.
+public boolean viewportGizmoPivotValid = false;
 // Center in window coordinates (origin bottom-left, same as Mouse.getY()).
 // Keep both float (for stable drawing) and int (for hit-testing).
 public float viewportMoveGizmoCenterXf = 0;
 public float viewportMoveGizmoCenterYf = 0;
+public float viewportMoveGizmoCenterDepth = 0;
 public int viewportMoveGizmoCenterX = 0;
 public int viewportMoveGizmoCenterY = 0;
 // Layout sizes (pixels)
@@ -71,6 +76,18 @@ public int viewportMoveGizmoCenterRadius = 18;
 public float viewportMoveGizmoWorldX;
 public float viewportMoveGizmoWorldY;
 public float viewportMoveGizmoWorldZ;
+// World-axis rotation gizmo (gimbal rings) overlay
+public boolean viewportRotateGizmoVisible = false;
+// Screen-aligned scale gizmo (overlay). Uses the same pivot as move/rotate.
+public boolean viewportScaleGizmoVisible = false;
+// Ring visual sizes (pixels, set from prefs each frame)
+public int viewportRotateGizmoRingRadiusPx = 80;
+public int viewportRotateGizmoRingThickPx = 6;
+
+// Temporary buffers for projecting ring points
+private final FloatBuffer viewportRotateGizmoTmpWinPos = BufferUtils.createFloatBuffer(3);
+private final FloatBuffer viewportRotateGizmoUnprojA = BufferUtils.createFloatBuffer(3);
+private final FloatBuffer viewportRotateGizmoUnprojB = BufferUtils.createFloatBuffer(3);
 
 // Cached matrices/viewport from the 3D pass so we can project axes for world-axis mode
 private final FloatBuffer viewportMoveGizmoModelMat = BufferUtils.createFloatBuffer(16);
@@ -315,7 +332,11 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 		glLoadIdentity();
 
 		renderLeftPane(leftSidebarWidth, frameHeight);	
-		drawViewportMoveGizmoOverlay(leftSidebarWidth);
+		if (!ModelCreator.viewportGizmoHidden) {
+			drawViewportMoveGizmoOverlay(leftSidebarWidth);
+			drawViewportScaleGizmoOverlay(leftSidebarWidth);
+			drawViewportRotateGizmoOverlay(leftSidebarWidth);
+		}
 		drawCompass();
 		drawViewportMarquee(leftSidebarWidth);
 		
@@ -492,6 +513,14 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 	{
 		if (!ModelCreator.showGrid) return;
 		if (ModelCreator.showTreadmill) return;
+
+		// User-adjustable tiling: 1 = original single 16x16 tile
+		int tilesX = Math.max(1, Math.min(10, ModelCreator.viewportFloorGridCols));
+		int tilesZ = Math.max(1, Math.min(10, ModelCreator.viewportFloorGridRows));
+		int sizeX = 16 * tilesX;
+		int sizeZ = 16 * tilesZ;
+		int cx = sizeX / 2;
+		int cz = sizeZ / 2;
 		
 		float d1 = 0.8f;
 		float d2 = 0.6f;
@@ -500,22 +529,22 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 		glPushMatrix();
 		{
 			glColor3f(0.55F, 0.55F, 0.60F);
-			glTranslatef(-8, 0, -8);
+			glTranslatef(-cx, 0, -cz);
 
 			// Thin inside lines
 			glLineWidth(1F);
 			glBegin(GL_LINES);
 			{
-				for (int i = 1; i <= 16; i++)
+				for (int i = 1; i <= sizeX; i++)
 				{
 					glVertex3i(i, 0, 0);
-					glVertex3i(i, 0, 16);
+					glVertex3i(i, 0, sizeZ);
 				}
 
-				for (int i = 1; i <= 16; i++)
+				for (int i = 1; i <= sizeZ; i++)
 				{
 					glVertex3i(0, 0, i);
-					glVertex3i(16, 0, i);
+					glVertex3i(sizeX, 0, i);
 				}
 			}
 			glEnd();
@@ -528,13 +557,13 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 			glBegin(GL_LINES);
 			{
 				glVertex3i(0, 0, 0);
-				glVertex3i(0, 0, 16);
-				glVertex3i(16, 0, 0);
-				glVertex3i(16, 0, 16);
-				glVertex3i(0, 0, 16);
-				glVertex3i(16, 0, 16);
+				glVertex3i(0, 0, sizeZ);
+				glVertex3i(sizeX, 0, 0);
+				glVertex3i(sizeX, 0, sizeZ);
+				glVertex3i(0, 0, sizeZ);
+				glVertex3i(sizeX, 0, sizeZ);
 				glVertex3i(0, 0, 0);
-				glVertex3i(16, 0, 0);
+				glVertex3i(sizeX, 0, 0);
 			}
 			glEnd();
 
@@ -544,10 +573,10 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 			glLineWidth(2F);
 			glBegin(GL_LINES);
 			{
-				glVertex3i(8, 0, 0);
-				glVertex3i(8, 0, 16);
-				glVertex3i(0, 0, 8);
-				glVertex3i(16, 0, 8);
+				glVertex3i(cx, 0, 0);
+				glVertex3i(cx, 0, sizeZ);
+				glVertex3i(0, 0, cz);
+				glVertex3i(sizeX, 0, cz);
 			}
 			glEnd();
 
@@ -563,29 +592,142 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 				glVertex3i(0, 0, 0);
 				glVertex3i(0, 16, 0);
 				
-				glVertex3i(16, 0, 0);
-				glVertex3i(16, 16, 0);
+				glVertex3i(sizeX, 0, 0);
+				glVertex3i(sizeX, 16, 0);
 
-				glVertex3i(16, 0, 16);
-				glVertex3i(16, 16, 16);
+				glVertex3i(sizeX, 0, sizeZ);
+				glVertex3i(sizeX, 16, sizeZ);
 				
-				glVertex3i(0, 0, 16);
-				glVertex3i(0, 16, 16);
+				glVertex3i(0, 0, sizeZ);
+				glVertex3i(0, 16, sizeZ);
 				
 				glVertex3i(0, 16, 0);
-				glVertex3i(16, 16, 0);
+				glVertex3i(sizeX, 16, 0);
 				
-				glVertex3i(16, 16, 0);
-				glVertex3i(16, 16, 16);
+				glVertex3i(sizeX, 16, 0);
+				glVertex3i(sizeX, 16, sizeZ);
 				
-				glVertex3i(16, 16, 16);
-				glVertex3i(0, 16, 16);
+				glVertex3i(sizeX, 16, sizeZ);
+				glVertex3i(0, 16, sizeZ);
 				
-				glVertex3i(0, 16, 16);
+				glVertex3i(0, 16, sizeZ);
 				glVertex3i(0, 16, 0);
 			}
 			glEnd();
 		}
+
+// Optional overlays: show VS block boundaries on the floor and in the air
+boolean showBlocksFloor = ModelCreator.viewportShowBlocksFloor;
+boolean showBlocksAir = ModelCreator.viewportShowBlocksAir;
+int airAbove = Math.max(0, Math.min(10, ModelCreator.viewportAirBlocksAbove));
+int airBelow = Math.max(0, Math.min(10, ModelCreator.viewportAirBlocksBelow));
+
+if (showBlocksFloor)
+{
+	// Bold 16x16 block outlines on the floor plane
+	glLineWidth(2F);
+	glColor3f(0.55F * d1, 0.55F * d1, 0.60F * d1);
+	glBegin(GL_LINES);
+	{
+		for (int x = 0; x <= sizeX; x += 16)
+		{
+			glVertex3i(x, 0, 0);
+			glVertex3i(x, 0, sizeZ);
+		}
+		for (int z = 0; z <= sizeZ; z += 16)
+		{
+			glVertex3i(0, 0, z);
+			glVertex3i(sizeX, 0, z);
+		}
+	}
+	glEnd();
+}
+
+if (showBlocksAir && (airAbove > 0 || airBelow > 0))
+{
+	// Slight Y offset to reduce z-fighting with the main grid lines
+	float eps = 0.01f;
+
+	// Above-grid outlines (same theme color)
+	if (airAbove > 0)
+	{
+		int maxY = 16 * airAbove;
+		glLineWidth(1.2F);
+		glColor3f(0.55F * d1, 0.55F * d1, 0.60F * d1);
+
+		glBegin(GL_LINES);
+		{
+			// Vertical edges at block corners
+			for (int x = 0; x <= sizeX; x += 16)
+			{
+				for (int z = 0; z <= sizeZ; z += 16)
+				{
+					glVertex3f(x, 0 + eps, z);
+					glVertex3f(x, maxY + eps, z);
+				}
+			}
+
+			// Horizontal outlines per block layer
+			for (int layer = 0; layer <= airAbove; layer++)
+			{
+				float y = 16 * layer + eps;
+
+				for (int x = 0; x <= sizeX; x += 16)
+				{
+					glVertex3f(x, y, 0);
+					glVertex3f(x, y, sizeZ);
+				}
+				for (int z = 0; z <= sizeZ; z += 16)
+				{
+					glVertex3f(0, y, z);
+					glVertex3f(sizeX, y, z);
+				}
+			}
+		}
+		glEnd();
+	}
+
+	// Below-grid outlines (orange/red tint for "below ground")
+	if (airBelow > 0)
+	{
+		int minY = -16 * airBelow;
+		glLineWidth(1.2F);
+		glColor3f(0.90F, 0.45F, 0.25F);
+
+		glBegin(GL_LINES);
+		{
+			// Vertical edges at block corners
+			for (int x = 0; x <= sizeX; x += 16)
+			{
+				for (int z = 0; z <= sizeZ; z += 16)
+				{
+					glVertex3f(x, 0 - eps, z);
+					glVertex3f(x, minY - eps, z);
+				}
+			}
+
+			// Horizontal outlines per block layer
+			for (int layer = 0; layer <= airBelow; layer++)
+			{
+				float y = -16 * layer - eps;
+
+				for (int x = 0; x <= sizeX; x += 16)
+				{
+					glVertex3f(x, y, 0);
+					glVertex3f(x, y, sizeZ);
+				}
+				for (int z = 0; z <= sizeZ; z += 16)
+				{
+					glVertex3f(0, y, z);
+					glVertex3f(sizeX, y, z);
+				}
+			}
+		}
+		glEnd();
+	}
+}
+
+
 		glPopMatrix();
 	}
 
@@ -628,19 +770,25 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 	private void updateViewportMoveGizmo(int leftSidebarWidth)
 	{
 		viewportMoveGizmoVisible = false;
+		viewportRotateGizmoVisible = false;
+		viewportScaleGizmoVisible = false;
+		viewportGizmoPivotValid = false;
 		Project project = ModelCreator.currentProject;
 		if (project == null || project.SelectedElement == null) return;
 		if (ModelCreator.renderAttachmentPoints) return;
 		// Hide in UV/Face tab (this overlay gizmo is for viewport translate)
 		if (ModelCreator.currentRightTab == 1) return;
 
-		List<Element> elems;
-		if (ModelCreator.viewportGroupMoveEnabled && project.SelectedElements != null && project.SelectedElements.size() > 1) {
-			elems = project.SelectedElements;
-		} else {
-			elems = java.util.Collections.singletonList(project.SelectedElement);
-		}
+		boolean useMulti = project.SelectedElements != null && project.SelectedElements.size() > 1
+						&& (ModelCreator.viewportGroupMoveEnabled
+																	|| ModelCreator.isViewportSelectionOutOfSync(project)
+																	|| ModelCreator.viewportGizmoMode == ModelCreator.VIEWPORT_GIZMO_MODE_SCALE);
+		List<Element> elems = useMulti ? project.SelectedElements : java.util.Collections.singletonList(project.SelectedElement);
 
+		// IMPORTANT: Elements may be parented and/or rotated. Computing the gizmo pivot purely from local
+		// StartX/StartY/StartZ causes the gizmo to drift or get "left behind" when moving multiple
+		// elements with different parent transforms. We therefore compute bounds in ROOT space by
+		// applying each element's full transform chain (including keyframe offsets when applicable).
 		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
 		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
 
@@ -655,27 +803,14 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 
 		for (Element e : elems) {
 			if (e == null) continue;
-
-			double sx = e.getStartX();
-			double sy = e.getStartY();
-			double sz = e.getStartZ();
-
-			if (keyframeTab && curFrame != null) {
-				AnimFrameElement afe = curFrame.GetAnimFrameElementRec(e);
-				if (afe == null) afe = curFrame.GetAnimFrameElementRecByName(e.getName());
-				if (afe != null) {
-					sx = e.getStartX() + afe.getOffsetX();
-					sy = e.getStartY() + afe.getOffsetY();
-					sz = e.getStartZ() + afe.getOffsetZ();
-				}
-			}
-
-			minX = Math.min(minX, sx);
-			minY = Math.min(minY, sy);
-			minZ = Math.min(minZ, sz);
-			maxX = Math.max(maxX, sx + e.getWidth());
-			maxY = Math.max(maxY, sy + e.getHeight());
-			maxZ = Math.max(maxZ, sz + e.getDepth());
+			double[] b = computeElementRootBounds(e, curFrame);
+			if (b == null) continue;
+			minX = Math.min(minX, b[0]);
+			minY = Math.min(minY, b[1]);
+			minZ = Math.min(minZ, b[2]);
+			maxX = Math.max(maxX, b[3]);
+			maxY = Math.max(maxY, b[4]);
+			maxZ = Math.max(maxZ, b[5]);
 		}
 		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return;
 
@@ -709,6 +844,7 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 		float wz = winPos.get(2);
 		viewportMoveGizmoCenterXf = wx;
 		viewportMoveGizmoCenterYf = wy;
+		viewportMoveGizmoCenterDepth = wz;
 		if (wz < 0f || wz > 1f) return;
 
 		int ix = Math.round(wx);
@@ -719,7 +855,102 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 
 		viewportMoveGizmoCenterX = ix;
 		viewportMoveGizmoCenterY = iy;
-		viewportMoveGizmoVisible = true;
+		viewportGizmoPivotValid = true;
+
+
+		// Only show one gizmo overlay at a time (Move or Rotate), unless the user has hidden the gizmo.
+		if (ModelCreator.viewportGizmoHidden) {
+			viewportMoveGizmoVisible = false;
+			viewportRotateGizmoVisible = false;
+			return;
+		}
+		if (ModelCreator.viewportGizmoMode == ModelCreator.VIEWPORT_GIZMO_MODE_ROTATE) {
+			viewportRotateGizmoVisible = true;
+			viewportMoveGizmoVisible = false;
+			viewportScaleGizmoVisible = false;
+		} else if (ModelCreator.viewportGizmoMode == ModelCreator.VIEWPORT_GIZMO_MODE_SCALE) {
+			viewportScaleGizmoVisible = true;
+			viewportMoveGizmoVisible = false;
+			viewportRotateGizmoVisible = false;
+		} else {
+			viewportMoveGizmoVisible = true;
+			viewportRotateGizmoVisible = false;
+			viewportScaleGizmoVisible = false;
+		}
+	}
+
+	/**
+	 * Computes an element's axis-aligned bounds in ROOT space by applying the full parent->child
+	 * transform chain. When a keyframe frame is provided, animation offsets are applied to the
+	 * Start translation for any element that has a matching AnimFrameElement.
+	 */
+	private double[] computeElementRootBounds(Element elem, AnimationFrame curFrame)
+	{
+		if (elem == null) return null;
+
+		float[] mat = Mat4f.Identity_(new float[16]);
+
+		// Apply parent transforms first (root -> parent)
+		List<Element> path = elem.GetParentPath();
+		if (path != null) {
+			for (Element p : path) {
+				applyTransformWithAnimOffset(mat, p, curFrame);
+			}
+		}
+		// Apply this element's transform
+		applyTransformWithAnimOffset(mat, elem, curFrame);
+
+		double w = elem.getWidth();
+		double h = elem.getHeight();
+		double d = elem.getDepth();
+
+		// Transform the 8 corners of the local AABB (0..w, 0..h, 0..d)
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		double[][] corners = new double[][] {
+			{0, 0, 0}, {w, 0, 0}, {0, h, 0}, {0, 0, d},
+			{w, h, 0}, {w, 0, d}, {0, h, d}, {w, h, d}
+		};
+
+		for (double[] c : corners) {
+			float[] out = Mat4f.MulWithVec4(mat, new float[] { (float)c[0], (float)c[1], (float)c[2], 1f });
+			double x = out[0];
+			double y = out[1];
+			double z = out[2];
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			minZ = Math.min(minZ, z);
+			maxX = Math.max(maxX, x);
+			maxY = Math.max(maxY, y);
+			maxZ = Math.max(maxZ, z);
+		}
+
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return null;
+		return new double[] { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	private void applyTransformWithAnimOffset(float[] mat, Element elem, AnimationFrame curFrame)
+	{
+		if (elem == null) return;
+		double offX = 0, offY = 0, offZ = 0;
+		if (curFrame != null) {
+			AnimFrameElement afe = curFrame.GetAnimFrameElementRec(elem);
+			if (afe == null) afe = curFrame.GetAnimFrameElementRecByName(elem.getName());
+			if (afe != null) {
+				offX = afe.getOffsetX();
+				offY = afe.getOffsetY();
+				offZ = afe.getOffsetZ();
+			}
+		}
+
+		Mat4f.Translate(mat, mat, new float[] { (float)elem.getOriginX(), (float)elem.getOriginY(), (float)elem.getOriginZ() });
+		Mat4f.RotateX(mat, mat, (float)elem.getRotationX() * GameMath.DEG2RAD);
+		Mat4f.RotateY(mat, mat, (float)elem.getRotationY() * GameMath.DEG2RAD);
+		Mat4f.RotateZ(mat, mat, (float)elem.getRotationZ() * GameMath.DEG2RAD);
+		Mat4f.Translate(mat, mat, new float[] { (float)-elem.getOriginX(), (float)-elem.getOriginY(), (float)-elem.getOriginZ() });
+
+		Mat4f.Translate(mat, mat, new float[] { (float)(elem.getStartX() + offX), (float)(elem.getStartY() + offY), (float)(elem.getStartZ() + offZ) });
 	}
 
 	private void drawViewportMoveGizmoOverlay(int leftSidebarWidth)
@@ -876,6 +1107,360 @@ public double[] getViewportMoveGizmoAxisDirWindow(int mode) {
 		glDisable(GL_BLEND);
 		glPopMatrix();
 	}
+
+	/**
+	 * Screen-space scale gizmo overlay. Visually similar to the move gizmo, but with
+	 * square handles and a center square for uniform scaling.
+	 */
+	private void drawViewportScaleGizmoOverlay(int leftSidebarWidth)
+	{
+		if (!viewportScaleGizmoVisible) return;
+		if (viewportMoveGizmoCenterX < leftSidebarWidth) return;
+
+		int cx = viewportMoveGizmoCenterX;
+		int cyTop = height - viewportMoveGizmoCenterY; // Ortho is top-left origin
+
+		int len = viewportMoveGizmoAxisLen;
+		int thick = viewportMoveGizmoAxisThick;
+		int halfT = thick / 2;
+		int handle = Math.max(10, thick + 8);
+		int hh = handle / 2;
+
+		glPushMatrix();
+		glDisable(GL_TEXTURE_2D);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable(GL_DEPTH_TEST);
+
+		// Center uniform handle
+		glColor4f(0.15f, 0.15f, 0.15f, 0.88f);
+		glBegin(GL_QUADS);
+		{
+			glVertex2i(cx - hh, cyTop - hh);
+			glVertex2i(cx + hh, cyTop - hh);
+			glVertex2i(cx + hh, cyTop + hh);
+			glVertex2i(cx - hh, cyTop + hh);
+		}
+		glEnd();
+		glColor4f(0.95f, 0.95f, 1f, 0.75f);
+		glLineWidth(2f);
+		glBegin(GL_LINE_LOOP);
+		{
+			glVertex2i(cx - hh, cyTop - hh);
+			glVertex2i(cx + hh, cyTop - hh);
+			glVertex2i(cx + hh, cyTop + hh);
+			glVertex2i(cx - hh, cyTop + hh);
+		}
+		glEnd();
+
+		if (ModelCreator.viewportFreedomModeEnabled) {
+			// Freedom mode: screen-aligned X/Y only.
+			// X axis (red)
+			glColor4f(1f, 0.25f, 0.25f, 0.78f);
+			glBegin(GL_QUADS);
+			{
+				glVertex2i(cx - len, cyTop - halfT);
+				glVertex2i(cx + len, cyTop - halfT);
+				glVertex2i(cx + len, cyTop + halfT);
+				glVertex2i(cx - len, cyTop + halfT);
+			}
+			glEnd();
+			// Handle squares
+			glColor4f(1f, 0.25f, 0.25f, 0.92f);
+			drawScaleHandleSquare(cx - len, cyTop, hh);
+			drawScaleHandleSquare(cx + len, cyTop, hh);
+
+			// Y axis (green)
+			glColor4f(0.25f, 1f, 0.25f, 0.78f);
+			glBegin(GL_QUADS);
+			{
+				glVertex2i(cx - halfT, cyTop - len);
+				glVertex2i(cx + halfT, cyTop - len);
+				glVertex2i(cx + halfT, cyTop + len);
+				glVertex2i(cx - halfT, cyTop + len);
+			}
+			glEnd();
+			glColor4f(0.25f, 1f, 0.25f, 0.92f);
+			drawScaleHandleSquare(cx, cyTop - len, hh);
+			drawScaleHandleSquare(cx, cyTop + len, hh);
+		} else {
+			// World-axis mode: draw projected world axes with square handles.
+			for (int m = 1; m <= 3; m++) {
+				double[] dirWin = getViewportMoveGizmoAxisDirWindow(m);
+				double dirx = dirWin[0];
+				double diry = -dirWin[1]; // convert window(up) -> ortho(down)
+
+				double x1 = cx - dirx * len;
+				double y1 = cyTop - diry * len;
+				double x2 = cx + dirx * len;
+				double y2 = cyTop + diry * len;
+
+				double perpx = -diry;
+				double perpy = dirx;
+				double ox = perpx * halfT;
+				double oy = perpy * halfT;
+
+				switch (m) {
+					case 1: glColor4f(1f, 0.25f, 0.25f, 0.78f); break;
+					case 2: glColor4f(0.25f, 1f, 0.25f, 0.78f); break;
+					case 3: glColor4f(0.25f, 0.55f, 1f, 0.78f); break;
+				}
+
+				glBegin(GL_QUADS);
+				{
+					glVertex2i((int)Math.round(x1 + ox), (int)Math.round(y1 + oy));
+					glVertex2i((int)Math.round(x1 - ox), (int)Math.round(y1 - oy));
+					glVertex2i((int)Math.round(x2 - ox), (int)Math.round(y2 - oy));
+					glVertex2i((int)Math.round(x2 + ox), (int)Math.round(y2 + oy));
+				}
+				glEnd();
+
+				// Handles at both ends
+				switch (m) {
+					case 1: glColor4f(1f, 0.25f, 0.25f, 0.92f); break;
+					case 2: glColor4f(0.25f, 1f, 0.25f, 0.92f); break;
+					case 3: glColor4f(0.25f, 0.55f, 1f, 0.92f); break;
+				}
+				drawScaleHandleSquare((int)Math.round(x1), (int)Math.round(y1), hh);
+				drawScaleHandleSquare((int)Math.round(x2), (int)Math.round(y2), hh);
+			}
+		}
+
+		glDisable(GL_BLEND);
+		glPopMatrix();
+	}
+
+	private void drawScaleHandleSquare(int x, int y, int hh)
+	{
+		glBegin(GL_QUADS);
+		{
+			glVertex2i(x - hh, y - hh);
+			glVertex2i(x + hh, y - hh);
+			glVertex2i(x + hh, y + hh);
+			glVertex2i(x - hh, y + hh);
+		}
+		glEnd();
+	}
+
+	/** Hit test in window coordinates (origin bottom-left). Returns 0 none, 1 X, 2 Y, 3 Z, 4 uniform(center). */
+	public int hitTestViewportScaleGizmo(int mouseX, int mouseY) {
+		if (!viewportScaleGizmoVisible || !viewportGizmoPivotValid) return 0;
+		int cx = viewportMoveGizmoCenterX;
+		int cy = viewportMoveGizmoCenterY;
+		int thick = viewportMoveGizmoAxisThick;
+		int handle = Math.max(10, thick + 8);
+		int hh = handle / 2;
+
+		// Center uniform handle
+		if (Math.abs(mouseX - cx) <= hh && Math.abs(mouseY - cy) <= hh) return 4;
+
+		int len = viewportMoveGizmoAxisLen;
+		if (ModelCreator.viewportFreedomModeEnabled) {
+			// X handles
+			if (Math.abs(mouseX - (cx - len)) <= hh && Math.abs(mouseY - cy) <= hh) return 1;
+			if (Math.abs(mouseX - (cx + len)) <= hh && Math.abs(mouseY - cy) <= hh) return 1;
+			// Y handles
+			if (Math.abs(mouseX - cx) <= hh && Math.abs(mouseY - (cy - len)) <= hh) return 2;
+			if (Math.abs(mouseX - cx) <= hh && Math.abs(mouseY - (cy + len)) <= hh) return 2;
+			return 0;
+		}
+
+		// World-axis projected handles
+		for (int m = 1; m <= 3; m++) {
+			double[] dirWin = getViewportMoveGizmoAxisDirWindow(m);
+			double dirx = dirWin[0];
+			double diry = dirWin[1];
+			int x1 = (int)Math.round(cx - dirx * len);
+			int y1 = (int)Math.round(cy - diry * len);
+			int x2 = (int)Math.round(cx + dirx * len);
+			int y2 = (int)Math.round(cy + diry * len);
+			if (Math.abs(mouseX - x1) <= hh && Math.abs(mouseY - y1) <= hh) return m;
+			if (Math.abs(mouseX - x2) <= hh && Math.abs(mouseY - y2) <= hh) return m;
+		}
+
+		return 0;
+	}
+
+/** Hit test in window coordinates (origin bottom-left). Returns 0 none, 1 X ring, 2 Y ring, 3 Z ring. */
+public int hitTestViewportRotateGizmo(int mouseX, int mouseY) {
+	if (!viewportRotateGizmoVisible || !viewportGizmoPivotValid) return 0;
+	// Do not interact under left UI
+	if (mouseX < 0 || mouseX < 0) {}
+	int cx = viewportMoveGizmoCenterX;
+	int cy = viewportMoveGizmoCenterY;
+	// Ignore if clicking too close to center (let move gizmo center handle win)
+	int inner = Math.max(6, viewportMoveGizmoCenterRadius + 4);
+	double dcx = mouseX - cx;
+	double dcy = mouseY - cy;
+	if (dcx*dcx + dcy*dcy <= inner*inner) return 0;
+
+	// Ring size in world units (derived from desired pixel radius at pivot depth)
+	viewportRotateGizmoRingThickPx = Math.max(2, Math.min(30, viewportMoveGizmoAxisThick / 2));
+	viewportRotateGizmoRingRadiusPx = Math.max(30, Math.min(600, viewportMoveGizmoAxisLen + 22));
+	double radiusWorld = getWorldRadiusForPixelRadius(viewportRotateGizmoRingRadiusPx);
+	if (!Double.isFinite(radiusWorld) || radiusWorld <= 0) radiusWorld = 1;
+
+	double bestDist2 = Double.POSITIVE_INFINITY;
+	int bestAxis = 0;
+	double thr = Math.max(5, viewportRotateGizmoRingThickPx + 4);
+	double thr2 = thr * thr;
+
+	for (int axis = 1; axis <= 3; axis++) {
+		double minDist2 = dist2ToProjectedRing(mouseX, mouseY, axis, (float)radiusWorld);
+		if (minDist2 <= thr2 && minDist2 < bestDist2) {
+			bestDist2 = minDist2;
+			bestAxis = axis;
+		}
+	}
+	return bestAxis;
+}
+
+private double dist2ToProjectedRing(int mouseX, int mouseY, int axis, float radiusWorld) {
+	final int steps = 64;
+	double best = Double.POSITIVE_INFINITY;
+
+	float px = viewportMoveGizmoWorldX;
+	float py = viewportMoveGizmoWorldY;
+	float pz = viewportMoveGizmoWorldZ;
+
+	for (int i = 0; i < steps; i++) {
+		double a0 = (Math.PI * 2.0) * (i / (double)steps);
+		double a1 = (Math.PI * 2.0) * ((i + 1) / (double)steps);
+		float x0, y0, z0, x1, y1, z1;
+		if (axis == 1) {
+			x0 = px; y0 = py + (float)Math.cos(a0) * radiusWorld; z0 = pz + (float)Math.sin(a0) * radiusWorld;
+			x1 = px; y1 = py + (float)Math.cos(a1) * radiusWorld; z1 = pz + (float)Math.sin(a1) * radiusWorld;
+		} else if (axis == 2) {
+			x0 = px + (float)Math.cos(a0) * radiusWorld; y0 = py; z0 = pz + (float)Math.sin(a0) * radiusWorld;
+			x1 = px + (float)Math.cos(a1) * radiusWorld; y1 = py; z1 = pz + (float)Math.sin(a1) * radiusWorld;
+		} else {
+			x0 = px + (float)Math.cos(a0) * radiusWorld; y0 = py + (float)Math.sin(a0) * radiusWorld; z0 = pz;
+			x1 = px + (float)Math.cos(a1) * radiusWorld; y1 = py + (float)Math.sin(a1) * radiusWorld; z1 = pz;
+		}
+		float[] w0 = projectWorldToWindow(x0, y0, z0);
+		float[] w1 = projectWorldToWindow(x1, y1, z1);
+		if (w0 == null || w1 == null) continue;
+		// Ignore segments projected behind near/far
+		if (w0[2] < 0f || w0[2] > 1f || w1[2] < 0f || w1[2] > 1f) continue;
+
+		double dist2 = distPointToSegmentSquared(mouseX, mouseY, w0[0], w0[1], w1[0], w1[1]);
+		if (dist2 < best) best = dist2;
+	}
+	return best;
+}
+
+private float[] projectWorldToWindow(float x, float y, float z) {
+	viewportMoveGizmoModelMat.rewind();
+	viewportMoveGizmoProjMat.rewind();
+	viewportMoveGizmoViewport.rewind();
+	viewportRotateGizmoTmpWinPos.clear();
+	boolean ok = GLU.gluProject(x, y, z, viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, viewportRotateGizmoTmpWinPos);
+	if (!ok) return null;
+	viewportRotateGizmoTmpWinPos.rewind();
+	float wx = viewportRotateGizmoTmpWinPos.get(0);
+	float wy = viewportRotateGizmoTmpWinPos.get(1);
+	float wz = viewportRotateGizmoTmpWinPos.get(2);
+	return new float[] { wx, wy, wz };
+}
+
+private double getWorldRadiusForPixelRadius(int pixelRadius) {
+	// Estimate world units per pixel at the gizmo pivot using unprojection at the pivot depth.
+	float cx = viewportMoveGizmoCenterXf;
+	float cy = viewportMoveGizmoCenterYf;
+	float cz = viewportMoveGizmoCenterDepth;
+	if (cz <= 0f || cz >= 1f) cz = 0.5f;
+
+	viewportMoveGizmoModelMat.rewind();
+	viewportMoveGizmoProjMat.rewind();
+	viewportMoveGizmoViewport.rewind();
+	viewportRotateGizmoUnprojA.clear();
+	boolean okA = GLU.gluUnProject(cx, cy, cz, viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, viewportRotateGizmoUnprojA);
+
+	viewportMoveGizmoModelMat.rewind();
+	viewportMoveGizmoProjMat.rewind();
+	viewportMoveGizmoViewport.rewind();
+	viewportRotateGizmoUnprojB.clear();
+	boolean okB = GLU.gluUnProject(cx + 1f, cy, cz, viewportMoveGizmoModelMat, viewportMoveGizmoProjMat, viewportMoveGizmoViewport, viewportRotateGizmoUnprojB);
+
+	if (!okA || !okB) return 1.0;
+
+	viewportRotateGizmoUnprojA.rewind();
+	viewportRotateGizmoUnprojB.rewind();
+	double ax = viewportRotateGizmoUnprojA.get(0);
+	double ay = viewportRotateGizmoUnprojA.get(1);
+	double az = viewportRotateGizmoUnprojA.get(2);
+	double bx = viewportRotateGizmoUnprojB.get(0);
+	double by = viewportRotateGizmoUnprojB.get(1);
+	double bz = viewportRotateGizmoUnprojB.get(2);
+	double dx = bx - ax, dy = by - ay, dz = bz - az;
+	double perPixel = Math.sqrt(dx*dx + dy*dy + dz*dz);
+	if (!Double.isFinite(perPixel) || perPixel < 1e-9) perPixel = 1.0;
+	return perPixel * pixelRadius;
+}
+
+private void drawViewportRotateGizmoOverlay(int leftSidebarWidth) {
+	if (!viewportRotateGizmoVisible || !viewportGizmoPivotValid) return;
+	if (viewportMoveGizmoCenterX < leftSidebarWidth) return;
+
+	// Size derived from move gizmo visuals
+	viewportRotateGizmoRingThickPx = Math.max(2, Math.min(30, viewportMoveGizmoAxisThick / 2));
+	viewportRotateGizmoRingRadiusPx = Math.max(30, Math.min(600, viewportMoveGizmoAxisLen + 22));
+	double radiusWorld = getWorldRadiusForPixelRadius(viewportRotateGizmoRingRadiusPx);
+	if (!Double.isFinite(radiusWorld) || radiusWorld <= 0) radiusWorld = 1;
+
+	int steps = 64;
+	int cx = viewportMoveGizmoCenterX;
+	int cyTop = height - viewportMoveGizmoCenterY;
+
+	glPushMatrix();
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_DEPTH_TEST);
+
+	glLineWidth((float)viewportRotateGizmoRingThickPx);
+
+	float px = viewportMoveGizmoWorldX;
+	float py = viewportMoveGizmoWorldY;
+	float pz = viewportMoveGizmoWorldZ;
+
+	for (int axis = 1; axis <= 3; axis++) {
+		if (axis == 1) glColor4f(1f, 0.25f, 0.25f, 0.70f);
+		if (axis == 2) glColor4f(0.25f, 1f, 0.25f, 0.70f);
+		if (axis == 3) glColor4f(0.25f, 0.55f, 1f, 0.70f);
+
+		glBegin(GL_LINES);
+		for (int i = 0; i < steps; i++) {
+			double a0 = (Math.PI * 2.0) * (i / (double)steps);
+			double a1 = (Math.PI * 2.0) * ((i + 1) / (double)steps);
+			float x0, y0, z0, x1, y1, z1;
+			if (axis == 1) {
+				x0 = px; y0 = py + (float)Math.cos(a0) * (float)radiusWorld; z0 = pz + (float)Math.sin(a0) * (float)radiusWorld;
+				x1 = px; y1 = py + (float)Math.cos(a1) * (float)radiusWorld; z1 = pz + (float)Math.sin(a1) * (float)radiusWorld;
+			} else if (axis == 2) {
+				x0 = px + (float)Math.cos(a0) * (float)radiusWorld; y0 = py; z0 = pz + (float)Math.sin(a0) * (float)radiusWorld;
+				x1 = px + (float)Math.cos(a1) * (float)radiusWorld; y1 = py; z1 = pz + (float)Math.sin(a1) * (float)radiusWorld;
+			} else {
+				x0 = px + (float)Math.cos(a0) * (float)radiusWorld; y0 = py + (float)Math.sin(a0) * (float)radiusWorld; z0 = pz;
+				x1 = px + (float)Math.cos(a1) * (float)radiusWorld; y1 = py + (float)Math.sin(a1) * (float)radiusWorld; z1 = pz;
+			}
+			float[] w0 = projectWorldToWindow(x0, y0, z0);
+			float[] w1 = projectWorldToWindow(x1, y1, z1);
+			if (w0 == null || w1 == null) continue;
+			if (w0[2] < 0f || w0[2] > 1f || w1[2] < 0f || w1[2] > 1f) continue;
+			int sx0 = (int)Math.round(w0[0]);
+			int sy0 = (int)Math.round(height - w0[1]);
+			int sx1 = (int)Math.round(w1[0]);
+			int sy1 = (int)Math.round(height - w1[1]);
+			glVertex2i(sx0, sy0);
+			glVertex2i(sx1, sy1);
+		}
+		glEnd();
+	}
+
+	glDisable(GL_BLEND);
+	glPopMatrix();
+}
 
 	public void drawCompass() {
 		if (!ModelCreator.showGrid) return;

@@ -198,10 +198,19 @@ public class AnimFrameElement implements IDrawable
 		
 		GL11.glPopMatrix();
 		
-		
-		if (selectedElem == AnimatedElement) {
-			drawSelectionExtras();
-		}
+			
+			// Multi-selection support: draw full gizmo for the primary selection,
+			// and a lightweight outline for any additional selected elements.
+			boolean isInMultiSelection = false;
+			if (ModelCreator.currentProject != null && ModelCreator.currentProject.SelectedElements != null) {
+				isInMultiSelection = ModelCreator.currentProject.SelectedElements.contains(AnimatedElement);
+			}
+			
+			if (selectedElem == AnimatedElement) {
+				drawSelectionExtras();
+			} else if (isInMultiSelection) {
+				drawSelectionOutlineOnly();
+			}
 	}
 	
 
@@ -280,7 +289,12 @@ public class AnimFrameElement implements IDrawable
 			GL11.glDisable(GL11.GL_DEPTH_TEST);
 			GL11.glBegin(GL11.GL_LINES);
 			{
-				GL11.glColor4f(0F, 0F, 0F, 0.5f);
+				// Match the selected color used in Element.drawSelectionExtras
+				if (ModelCreator.darkMode) {
+					GL11.glColor4f(1f, 1f, 0.5f, 1f);
+				} else {
+					GL11.glColor4f(0F, 0F, 0F, 0.5f);
+				}
 				
 				float w = (float)AnimatedElement.width;
 				float h = (float)AnimatedElement.height;
@@ -329,6 +343,83 @@ public class AnimFrameElement implements IDrawable
 		
 		}
 		GL11.glPopMatrix();		
+	}
+
+	/**
+	 * Lightweight selection marker for non-primary selections.
+	 * Draws only the element outline (no axis gizmo).
+	 */
+	public void drawSelectionOutlineOnly()
+	{
+		double originX = AnimatedElement.originX + this.getOriginX();
+		double originY = AnimatedElement.originY + this.getOriginY();
+		double originZ = AnimatedElement.originZ + this.getOriginZ();
+		
+		double startX = AnimatedElement.startX + getOffsetX();
+		double startY = AnimatedElement.startY + getOffsetY();
+		double startZ = AnimatedElement.startZ + getOffsetZ();
+
+		GL11.glLineWidth(1f);
+		GL11.glPushMatrix();
+		{
+			GL11.glTranslated(originX, originY, originZ);
+			rotateAxis();
+			GL11.glTranslated(-originX, -originY, -originZ);
+			GL11.glTranslated(startX, startY, startZ);
+			
+			GL11.glDisable(GL11.GL_DEPTH_TEST);
+			GL11.glBegin(GL11.GL_LINES);
+			{
+				if (ModelCreator.darkMode) {
+					GL11.glColor4f(1f, 1f, 0.5f, 1f);
+				} else {
+					GL11.glColor4f(0F, 0F, 0F, 0.5f);
+				}
+				
+				float w = (float)AnimatedElement.width;
+				float h = (float)AnimatedElement.height;
+				float d = (float)AnimatedElement.depth;
+				
+				GL11.glVertex3f(0, 0, 0);
+				GL11.glVertex3f(0, h, 0);
+				
+				GL11.glVertex3f(w, 0, 0);
+				GL11.glVertex3f(w, h, 0);
+				
+				GL11.glVertex3f(w, 0, d);
+				GL11.glVertex3f(w, h, d);
+				
+				GL11.glVertex3f(0, 0, d);
+				GL11.glVertex3f(0, h, d);
+				
+				GL11.glVertex3f(0, h, 0);
+				GL11.glVertex3f(w, h, 0);
+				
+				GL11.glVertex3f(w, h, 0);
+				GL11.glVertex3f(w, h, d);
+				
+				GL11.glVertex3f(w, h, d);
+				GL11.glVertex3f(0, h, d);
+				
+				GL11.glVertex3f(0, h, d);
+				GL11.glVertex3f(0, h, 0);
+				
+				GL11.glVertex3f(0, 0, 0);
+				GL11.glVertex3f(w, 0, 0);
+				
+				GL11.glVertex3f(w, 0, 0);
+				GL11.glVertex3f(w, 0, d);
+				
+				GL11.glVertex3f(w, 0, d);
+				GL11.glVertex3f(0, 0, d);
+				
+				GL11.glVertex3f(0, 0, d);
+				GL11.glVertex3f(0, 0, 0);
+			}
+			GL11.glEnd();
+			GL11.glEnable(GL11.GL_DEPTH_TEST);
+		}
+		GL11.glPopMatrix();
 	}
 	
 	

@@ -28,8 +28,10 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 import at.vintagestory.modelcreator.ModelCreator;
+import at.vintagestory.modelcreator.Project;
 import at.vintagestory.modelcreator.model.Animation;
 import at.vintagestory.modelcreator.model.Element;
+import at.vintagestory.modelcreator.model.PendingTexture;
 import at.vintagestory.modelcreator.util.Mat4f;
 import at.vintagestory.modelcreator.util.UVMapExporter;
 import at.vintagestory.modelcreator.util.screenshot.AnimatedGifCapture;
@@ -52,7 +54,10 @@ public class GuiMenu extends JMenuBar
 	private JMenu menuFile;
 	private JMenuItem itemNew;
 	private JMenuItem itemLoad;
+	private JMenu menuOpenRecent;
+	private JMenu menuOpenRecentlySaved;
 	private JMenuItem itemTexturePath;
+	private JMenuItem itemReferenceImage;
 	private JMenuItem itemShapePath;
 	private JMenuItem colorPath;
 
@@ -145,6 +150,8 @@ public class GuiMenu extends JMenuBar
 	public JMenuItem itemSavePngAnimation;
 	private JMenuItem itemReloadTextures;
 	private JCheckBoxMenuItem itemAutoReloadTextures;
+	private JCheckBoxMenuItem itemAutoFixZFighting;
+	private JCheckBoxMenuItem itemChildrenInheritRenderPass;
 	private JMenuItem itemImgurLink;
 	
 	/* Help */
@@ -165,11 +172,17 @@ public class GuiMenu extends JMenuBar
 		{
 			itemNew = createItem("New", "New Model", KeyEvent.VK_N, new ImageIcon(getClass().getClassLoader().getResource("icons/new.png")));
 			itemLoad = createItem("Open...", "Open JSON", KeyEvent.VK_O, new ImageIcon(getClass().getClassLoader().getResource("icons/load.png")));
+			menuOpenRecent = new JMenu("Open Recent");
+			menuOpenRecent.setToolTipText("Recently opened files");
+			menuOpenRecentlySaved = new JMenu("Open Recently Saved");
+			menuOpenRecentlySaved.setToolTipText("Recently saved files");
+			rebuildOpenRecentMenu();
 			itemImport = createItem("Import...", "Import JSON into existing file", KeyEvent.VK_I, new ImageIcon(getClass().getClassLoader().getResource("icons/arrow_join.png")));
 			
 			itemSave = createItem("Save...", "Save JSON", KeyEvent.VK_S, new ImageIcon(getClass().getClassLoader().getResource("icons/disk.png")));
 			itemSaveAs = createItem("Save as...", "Save JSON", KeyEvent.VK_E, new ImageIcon(getClass().getClassLoader().getResource("icons/disk_multiple.png")));
 			itemTexturePath = createItem("Set Texture base path...", "Set the base path to look for textures", KeyEvent.VK_P, new ImageIcon(getClass().getClassLoader().getResource("icons/texture.png")));
+			itemReferenceImage = createItem("Set reference image...", "Load a PNG/JPG and create/update a reference plane", KeyEvent.VK_R, new ImageIcon(getClass().getClassLoader().getResource("icons/texture.png")));
 			itemShapePath = createItem("Set Shape base path...", "Set the base path to look for backdrop models", KeyEvent.VK_P, new ImageIcon(getClass().getClassLoader().getResource("icons/cube.png")));
 			colorPath = createItem("Set Color config path...", "Set the path for the color config", KeyEvent.VK_P, new ImageIcon(getClass().getClassLoader().getResource("icons/rainbow.png")));
 			itemExit = createItem("Exit", "Exit Application", KeyEvent.VK_Q, new ImageIcon(getClass().getClassLoader().getResource("icons/exit.png")));
@@ -204,6 +217,12 @@ public class GuiMenu extends JMenuBar
 			
 			itemSaveDisabledFaces = createCheckboxItem("Save disabled faces", "Whether disabled faces also get saved to file.", 0, Icons.transparent);
 			itemSaveDisabledFaces.setSelected(ModelCreator.saveDisabledFaces);
+
+			itemAutoFixZFighting = createCheckboxItem("Autofix Z-Fighting", "When enabled, the editor will nudge newly created/duplicated elements and dropped/moved elements by +0.001 blocks (≈ +0.016 model units) when perfectly overlapping faces are detected (axis-aligned only).", 0, Icons.transparent);
+			itemAutoFixZFighting.setSelected(ModelCreator.autofixZFighting);
+
+			itemChildrenInheritRenderPass = createCheckboxItem("Children Inherit Render Pass", "When enabled, changing the render pass on a parent element will also apply the same render pass to all its children (and their children).", 0, Icons.transparent);
+			itemChildrenInheritRenderPass.setSelected(ModelCreator.childrenInheritRenderPass);
 
 			itemLoadAsBackdrop = createItem("Set backdrop...", "Set a model as a backdrop", KeyEvent.VK_K, new ImageIcon(getClass().getClassLoader().getResource("icons/import.png")));
 			itemClearBackdrop = createItem("Clear backdrop", "Remove the backdrop again", KeyEvent.VK_L, new ImageIcon(getClass().getClassLoader().getResource("icons/clear.png")));
@@ -348,6 +367,8 @@ public class GuiMenu extends JMenuBar
 		menuProject.add(itemNoTextureSize);
 		menuProject.add(itemSaratyMode);
 		menuProject.add(itemSaveDisabledFaces);
+		menuProject.add(itemAutoFixZFighting);
+		menuProject.add(itemChildrenInheritRenderPass);
 		menuProject.addSeparator();
 		menuProject.add(itemAutoReloadTextures);
 		menuProject.add(itemReloadTextures);
@@ -414,11 +435,15 @@ public class GuiMenu extends JMenuBar
 		menuFile.add(itemNew);
 		menuFile.addSeparator();
 		menuFile.add(itemLoad);
+		menuFile.add(menuOpenRecent);
+		// Separate menu for recently saved files (File -> Open Recently Saved)
+		menuFile.add(menuOpenRecentlySaved);
 		menuFile.add(itemImport);
 		menuFile.add(itemSave);
 		menuFile.add(itemSaveAs);
 		menuFile.addSeparator();
 		menuFile.add(itemTexturePath);
+		menuFile.add(itemReferenceImage);
 		menuFile.add(itemShapePath);
 		menuFile.add(colorPath);
 		menuFile.addSeparator();
@@ -590,12 +615,13 @@ public class GuiMenu extends JMenuBar
 			} else {
 				creator.SaveProject(new File(ModelCreator.currentProject.filePath));
 			}
+			rebuildOpenRecentMenu();
 		};
 		
 		itemSave.addActionListener(listener);
 		
 
-		itemSaveAs.addActionListener(e -> { creator.SaveProjectAs(); });
+		itemSaveAs.addActionListener(e -> { creator.SaveProjectAs(); rebuildOpenRecentMenu(); });
 
 		
 		
@@ -612,6 +638,56 @@ public class GuiMenu extends JMenuBar
 		};
 
 		itemTexturePath.addActionListener(listener);
+
+		listener = e ->
+		{
+			JFileChooser chooser = new JFileChooser(ModelCreator.prefs.get("texturePath", "."));
+			chooser.setDialogTitle("Texture Path");
+			chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+			int returnVal = chooser.showOpenDialog(null);
+			if (returnVal == JFileChooser.APPROVE_OPTION)
+			{
+				ModelCreator.prefs.put("texturePath", chooser.getSelectedFile().getAbsolutePath());
+			}
+		};
+
+		itemTexturePath.addActionListener(listener);
+
+		listener = e ->
+		{
+			JFileChooser chooser = new JFileChooser(ModelCreator.prefs.get("referenceImagePath", ModelCreator.prefs.get("filePath", ".")));
+			chooser.setDialogTitle("Reference Image");
+			chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+			chooser.setAcceptAllFileFilterUsed(true);
+			chooser.setFileFilter(new FileNameExtensionFilter("Image (.png, .jpg, .jpeg)", "png", "jpg", "jpeg"));
+
+			int returnVal = chooser.showOpenDialog(null);
+			if (returnVal == JFileChooser.APPROVE_OPTION)
+			{
+				File imgFile = chooser.getSelectedFile();
+				if (imgFile != null) {
+					ModelCreator.prefs.put("referenceImagePath", imgFile.getParent());
+					// Texture uploads must happen on the render thread. Use the existing PendingTexture queue.
+					Project targetProject = ModelCreator.currentProject;
+					PendingTexture ptex = new PendingTexture("refimage", imgFile, (isNew, errormessage, texture) -> {
+						SwingUtilities.invokeLater(() -> {
+							if (errormessage != null) {
+								JOptionPane.showMessageDialog(null, errormessage, "Reference image", JOptionPane.ERROR_MESSAGE);
+								return;
+							}
+							String err2 = targetProject.applyReferenceImagePlane("refimage");
+							if (err2 != null) {
+								JOptionPane.showMessageDialog(null, err2, "Reference image", JOptionPane.ERROR_MESSAGE);
+							}
+						});
+					}, 0);
+					ptex.SetIsReferenceImage();
+					creator.AddPendingTexture(ptex);
+				}
+			}
+		};
+		itemReferenceImage.addActionListener(listener);
+
 
 		
 		
@@ -737,7 +813,23 @@ public class GuiMenu extends JMenuBar
 			ModelCreator.saveDisabledFaces = itemSaveDisabledFaces.isSelected();
 			ModelCreator.prefs.putBoolean("saveDisabledFaces", ModelCreator.saveDisabledFaces);
 		});
-		
+		itemAutoFixZFighting.addActionListener(a -> {
+			ModelCreator.autofixZFighting = itemAutoFixZFighting.isSelected();
+			ModelCreator.prefs.putBoolean("autofixZFighting", ModelCreator.autofixZFighting);
+
+			// Optional one-shot run on the currently selected element so the user sees an immediate effect.
+			if (ModelCreator.autofixZFighting && ModelCreator.currentProject != null && ModelCreator.currentProject.SelectedElement != null && ModelCreator.currentRightTab == 0) {
+				ModelCreator.currentProject.autoFixZFighting(java.util.Arrays.asList(ModelCreator.currentProject.SelectedElement), ModelCreator.autofixZFightingEpsilon, true);
+			}
+		});
+		itemAutoFixZFighting.setSelected(ModelCreator.autofixZFighting);
+
+		itemChildrenInheritRenderPass.addActionListener(a -> {
+			ModelCreator.childrenInheritRenderPass = itemChildrenInheritRenderPass.isSelected();
+			ModelCreator.prefs.putBoolean("childrenInheritRenderPass", ModelCreator.childrenInheritRenderPass);
+		});
+		itemChildrenInheritRenderPass.setSelected(ModelCreator.childrenInheritRenderPass);
+
 		itemuvShowNames.addActionListener(a -> {
 			ModelCreator.uvShowNames = itemuvShowNames.isSelected();
 			ModelCreator.prefs.putBoolean("uvShowNames", ModelCreator.uvShowNames);
@@ -919,7 +1011,8 @@ public class GuiMenu extends JMenuBar
 		
 		itemAddCube.addActionListener(a ->
 		{
-			ModelCreator.currentProject.addElementAsChild(new Element(1, 1, 1));
+			Element e = new Element(1, 1, 1);
+			ModelCreator.currentProject.addCubeSmartCentered(e);
 		});
 		
 		itemAddFace.addActionListener(a ->
@@ -1009,7 +1102,10 @@ public class GuiMenu extends JMenuBar
 	private void OnLoadFile()
 	{
 		String filepath = getJsonFilePathFromFileOpenDialog("Select file to open");
-		if (filepath != null) creator.LoadFile(filepath);
+		if (filepath != null) {
+			creator.LoadFile(filepath);
+			rebuildOpenRecentMenu();
+		}
 	}
 	
 	private void OnImportFile()
@@ -1058,6 +1154,72 @@ public class GuiMenu extends JMenuBar
 	private void OnNewModel()
 	{
 		creator.LoadFile(null);
+	}
+
+	private void rebuildOpenRecentMenu()
+	{
+		if (menuOpenRecent == null) return;
+		if (menuOpenRecentlySaved == null) return;
+		menuOpenRecent.removeAll();
+		menuOpenRecentlySaved.removeAll();
+		java.util.List<String> recentsOpened = ModelCreator.getRecentFiles();
+		java.util.List<String> recentsSaved = ModelCreator.getRecentlySavedFiles();
+		boolean hasOpened = recentsOpened != null && recentsOpened.size() > 0;
+		boolean hasSaved = recentsSaved != null && recentsSaved.size() > 0;
+
+		// File -> Open Recent (opened)
+		if (!hasOpened) {
+			JMenuItem emptyOpened = new JMenuItem("(No recently opened files)");
+			emptyOpened.setEnabled(false);
+			menuOpenRecent.add(emptyOpened);
+			menuOpenRecent.setEnabled(false);
+		} else {
+			menuOpenRecent.setEnabled(true);
+			for (String path : recentsOpened) {
+				if (path == null || path.trim().length() == 0) continue;
+				java.io.File f = new java.io.File(path);
+				String label = f.getName();
+				JMenuItem item = new JMenuItem(label);
+				item.setToolTipText(path);
+				if (!f.exists()) {
+					item.setText(label + " (missing)");
+					item.setEnabled(false);
+				} else {
+					item.addActionListener(e -> {
+						creator.LoadFile(path);
+						rebuildOpenRecentMenu();
+					});
+				}
+				menuOpenRecent.add(item);
+			}
+		}
+
+		// File -> Open Recently Saved
+		if (!hasSaved) {
+			JMenuItem emptySaved = new JMenuItem("(No recently saved files)");
+			emptySaved.setEnabled(false);
+			menuOpenRecentlySaved.add(emptySaved);
+			menuOpenRecentlySaved.setEnabled(false);
+		} else {
+			menuOpenRecentlySaved.setEnabled(true);
+			for (String path : recentsSaved) {
+				if (path == null || path.trim().length() == 0) continue;
+				java.io.File f = new java.io.File(path);
+				String label = f.getName();
+				JMenuItem item = new JMenuItem(label);
+				item.setToolTipText(path);
+				if (!f.exists()) {
+					item.setText(label + " (missing)");
+					item.setEnabled(false);
+				} else {
+					item.addActionListener(e -> {
+						creator.LoadFile(path);
+						rebuildOpenRecentMenu();
+					});
+				}
+				menuOpenRecentlySaved.add(item);
+			}
+		}
 	}
 	
 

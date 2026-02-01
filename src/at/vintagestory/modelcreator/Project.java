@@ -1,10 +1,14 @@
 package at.vintagestory.modelcreator;
 
 import java.awt.Image;
+import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.*;
+import javax.imageio.ImageIO;
 
 import javax.swing.ImageIcon;
 import javax.swing.JFileChooser;
@@ -268,9 +272,40 @@ public class Project
 		tree.addElementAsChild(elem);
 		SelectedElement = elem;
 		
+		if (ModelCreator.autofixZFighting && ModelCreator.currentRightTab == 0) {
+			autoFixZFighting(java.util.Arrays.asList(elem), ModelCreator.autofixZFightingEpsilon, false);
+		}
+		
 		ModelCreator.DidModify();
 		ModelCreator.updateValues(null);
 		tree.updateUI();
+	}
+
+	/**
+	 * Add a new cube either as a child of the current selection or as a new root element.
+	 *
+	 * Root cubes spawn at the center of the 16x16 floor grid (the editor renders elements with
+	 * a -8,-8 translation, so model-space grid center is (8, 0, 8)).
+	 *
+	 * Note: Some new-project states can have a stale SelectedElement reference even when there
+	 * are no root elements yet. In that case we still treat this as a root insert.
+	 */
+	public void addCubeSmartCentered(Element elem)
+	{
+		boolean treatAsRoot = (SelectedElement == null) || (rootElements.size() == 0);
+
+		if (treatAsRoot) {
+			double cx = 8 - elem.getWidth() / 2.0;
+			double cz = 8 - elem.getDepth() / 2.0;
+			elem.setStartX(cx);
+			elem.setStartY(0);
+			elem.setStartZ(cz);
+
+			addRootElement(elem);
+			return;
+		}
+
+		addElementAsChild(elem);
 	}
 	
 	
@@ -283,6 +318,9 @@ public class Project
 		tree.addRootElement(e);
 		SelectedElement = tree.getSelectedElement();
 		
+		if (ModelCreator.autofixZFighting && ModelCreator.currentRightTab == 0) {
+			autoFixZFighting(java.util.Arrays.asList(e), ModelCreator.autofixZFightingEpsilon, false);
+		}
 		ModelCreator.DidModify();
 		ModelCreator.updateValues(null);
 		tree.jtree.updateUI();
@@ -313,12 +351,389 @@ public class Project
 		ModelCreator.ignoreDidModify--;
 		
 		SelectedElement = tree.getSelectedElement();
+		// Auto-fix Z-fighting for the duplicated element (once, after creation)
+		if (ModelCreator.autofixZFighting && ModelCreator.currentRightTab == 0 && SelectedElement != null) {
+			autoFixZFighting(java.util.Arrays.asList(SelectedElement), ModelCreator.autofixZFightingEpsilon, false);
+		}
 		ModelCreator.DidModify();
 		ModelCreator.updateValues(null);
 		
 		ModelCreator.reloadStepparentRelationShips();
+	
+	}
+
+	/**
+	 * Auto-fix Z-fighting by nudging one of the elements by a tiny amount when
+	 * perfectly overlapping faces are detected (axis-aligned elements only).
+	 *
+	 * Performance friendly: intended to be called only after create/duplicate/drop events,
+	 * not every frame.
+	 *
+	 * @param focusElems Elements to check against the rest of the model
+	 * @param epsilon Amount to nudge along the detected axis
+	 * @param commit If true, issues a single DidModify() after applying the fix
+	 */
+	public boolean autoFixZFighting(java.util.List<Element> focusElems, double epsilon, boolean commit)
+	{
+		if (focusElems == null || focusElems.size() == 0) return false;
+		// Only for Modeling tab
+		if (ModelCreator.currentRightTab != 0) return false;
+		
+		java.util.List<Element> all = collectAllElements();
+		if (all == null || all.size() < 2) return false;
+		
+		boolean didFix = false;
+		int prevIgnore = ModelCreator.ignoreDidModify;
+		try {
+			// Suppress repeated history snapshots while we apply multiple tiny nudges
+			ModelCreator.ignoreDidModify++;
+			for (Element focus : focusElems) {
+				if (focus == null) continue;
+				didFix |= autoFixZFightingForElement(focus, all, epsilon);
+			}
+		} finally {
+			ModelCreator.ignoreDidModify = prevIgnore;
+		}
+		
+		if (didFix && commit) {
+			ModelCreator.DidModify();
+			ModelCreator.updateValues(null);
+		}
+		return didFix;
 	}
 	
+	private static class AABB {
+		double minX, minY, minZ;
+		double maxX, maxY, maxZ;
+	}
+	
+	private java.util.List<Element> collectAllElements()
+	{
+		java.util.ArrayList<Element> list = new java.util.ArrayList<Element>();
+		for (Element root : rootElements) {
+			collectAllElementsRec(root, list);
+		}
+		return list;
+	}
+	
+	private void collectAllElementsRec(Element elem, java.util.List<Element> list)
+	{
+		if (elem == null) return;
+		list.add(elem);
+		if (elem.ChildElements != null) {
+			for (Element child : elem.ChildElements) collectAllElementsRec(child, list);
+		}
+		if (elem.StepChildElements != null) {
+			for (Element child : elem.StepChildElements) collectAllElementsRec(child, list);
+		}
+	}
+	
+	private boolean autoFixZFightingForElement(Element focus, java.util.List<Element> all, double epsilon)
+	{
+		if (focus == null) return false;
+
+		// Two-stage approach:
+		// 1) Fast path for fully axis-aligned elements (no rotations in chain)
+		// 2) Robust path that supports rotations (common case: 90-degree rotations)
+		if (!hasRotationInChain(focus)) {
+			AABB a = getWorldAABB(focus);
+			if (a != null) {
+				final double tol = 1e-4;
+				double bestArea = 0;
+				int bestAxis = 0;
+				Element bestMover = null;
+
+				for (Element other : all) {
+					if (other == null || other == focus) continue;
+					if (hasRotationInChain(other)) continue;
+					AABB b = getWorldAABB(other);
+					if (b == null) continue;
+
+					// X faces
+					double oy = overlapLen(a.minY, a.maxY, b.minY, b.maxY);
+					double oz = overlapLen(a.minZ, a.maxZ, b.minZ, b.maxZ);
+					if (oy > tol && oz > tol) {
+						if (Math.abs(a.minX - b.minX) < tol || Math.abs(a.minX - b.maxX) < tol || Math.abs(a.maxX - b.minX) < tol || Math.abs(a.maxX - b.maxX) < tol) {
+							double area = oy * oz;
+							if (area > bestArea) { bestArea = area; bestAxis = 1; bestMover = chooseMover(focus, other); }
+						}
+					}
+
+					// Y faces
+					double ox = overlapLen(a.minX, a.maxX, b.minX, b.maxX);
+					if (ox > tol && oz > tol) {
+						if (Math.abs(a.minY - b.minY) < tol || Math.abs(a.minY - b.maxY) < tol || Math.abs(a.maxY - b.minY) < tol || Math.abs(a.maxY - b.maxY) < tol) {
+							double area = ox * oz;
+							if (area > bestArea) { bestArea = area; bestAxis = 2; bestMover = chooseMover(focus, other); }
+						}
+					}
+
+					// Z faces
+					double oy2 = overlapLen(a.minY, a.maxY, b.minY, b.maxY);
+					double ox2 = overlapLen(a.minX, a.maxX, b.minX, b.maxX);
+					if (ox2 > tol && oy2 > tol) {
+						if (Math.abs(a.minZ - b.minZ) < tol || Math.abs(a.minZ - b.maxZ) < tol || Math.abs(a.maxZ - b.minZ) < tol || Math.abs(a.maxZ - b.maxZ) < tol) {
+							double area = ox2 * oy2;
+							if (area > bestArea) { bestArea = area; bestAxis = 3; bestMover = chooseMover(focus, other); }
+						}
+					}
+				}
+
+				if (bestAxis != 0 && bestMover != null) {
+					// Axis-aligned elements: direct start offset works as expected
+					switch (bestAxis) {
+						case 1: bestMover.setStartX(bestMover.getStartX() + epsilon); return true;
+						case 2: bestMover.setStartY(bestMover.getStartY() + epsilon); return true;
+						case 3: bestMover.setStartZ(bestMover.getStartZ() + epsilon); return true;
+						default: break;
+					}
+				}
+			}
+		}
+
+		// Robust face-plane based detection (supports rotated elements).
+		// We intentionally keep this fairly lightweight: 6 faces per element.
+		final double planeTol = 1e-4;
+		final double overlapTol = 1e-6;
+		java.util.List<FaceRect> focusFaces = getWorldFaceRects(focus);
+		if (focusFaces == null || focusFaces.size() == 0) return false;
+
+		double bestArea = 0;
+		int bestAxis = 0;
+		Element bestMover = null;
+		for (Element other : all) {
+			if (other == null || other == focus) continue;
+			java.util.List<FaceRect> otherFaces = getWorldFaceRects(other);
+			if (otherFaces == null || otherFaces.size() == 0) continue;
+
+			for (FaceRect fa : focusFaces) {
+				for (FaceRect fb : otherFaces) {
+					if (fa.axis != fb.axis) continue;
+					if (Math.abs(fa.plane - fb.plane) > planeTol) continue;
+					double ou = overlapLen(fa.umin, fa.umax, fb.umin, fb.umax);
+					double ov = overlapLen(fa.vmin, fa.vmax, fb.vmin, fb.vmax);
+					if (ou <= overlapTol || ov <= overlapTol) continue;
+					double area = ou * ov;
+					if (area > bestArea) {
+						bestArea = area;
+						bestAxis = fa.axis;
+						bestMover = chooseMover(focus, other);
+					}
+				}
+			}
+		}
+
+		if (bestAxis == 0 || bestMover == null) return false;
+		applyWorldAxisNudge(bestMover, bestAxis, epsilon);
+		return true;
+	}
+
+	private static class FaceRect {
+		// Axis of the face normal in world space: 1=X, 2=Y, 3=Z
+		int axis;
+		// Plane coordinate along axis (world)
+		double plane;
+		// Bounds on the other two world axes
+		double umin, umax;
+		double vmin, vmax;
+	}
+
+	private java.util.List<FaceRect> getWorldFaceRects(Element elem)
+	{
+		if (elem == null) return null;
+		float[] mat = getWorldMatrix(elem);
+		if (mat == null) return null;
+
+		double w = elem.getWidth();
+		double h = elem.getHeight();
+		double d = elem.getDepth();
+
+		// Local vertices (after ApplyTransform, geometry is at 0..w/h/d)
+		double[][] lv = new double[][] {
+			{0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0},
+			{0, 0, d}, {w, 0, d}, {w, h, d}, {0, h, d}
+		};
+		double[][] v = new double[8][3];
+		for (int i = 0; i < 8; i++) {
+			float[] out = at.vintagestory.modelcreator.util.Mat4f.MulWithVec4(mat, new float[] { (float)lv[i][0], (float)lv[i][1], (float)lv[i][2], 1 });
+			v[i][0] = out[0];
+			v[i][1] = out[1];
+			v[i][2] = out[2];
+		}
+
+		// Faces as vertex indices (quads)
+		int[][] faces = new int[][] {
+			{0, 3, 7, 4}, // -X
+			{1, 5, 6, 2}, // +X
+			{0, 4, 5, 1}, // -Y
+			{3, 2, 6, 7}, // +Y
+			{0, 1, 2, 3}, // -Z
+			{4, 7, 6, 5}  // +Z
+		};
+
+		java.util.ArrayList<FaceRect> rects = new java.util.ArrayList<FaceRect>(6);
+		for (int fi = 0; fi < faces.length; fi++) {
+			int i0 = faces[fi][0];
+			int i1 = faces[fi][1];
+			int i2 = faces[fi][2];
+			int i3 = faces[fi][3];
+
+			// Normal from first 3 verts
+			double ax = v[i1][0] - v[i0][0];
+			double ay = v[i1][1] - v[i0][1];
+			double az = v[i1][2] - v[i0][2];
+			double bx = v[i2][0] - v[i0][0];
+			double by = v[i2][1] - v[i0][1];
+			double bz = v[i2][2] - v[i0][2];
+			double nx = ay * bz - az * by;
+			double ny = az * bx - ax * bz;
+			double nz = ax * by - ay * bx;
+			double nlen = Math.sqrt(nx*nx + ny*ny + nz*nz);
+			if (nlen < 1e-9) continue;
+			nx /= nlen; ny /= nlen; nz /= nlen;
+
+			// Quantize to axis-aligned normals only (covers 90-degree rotations)
+			double anx = Math.abs(nx), any = Math.abs(ny), anz = Math.abs(nz);
+			int axis;
+			if (anx >= any && anx >= anz && anx > 0.9) axis = 1;
+			else if (any >= anx && any >= anz && any > 0.9) axis = 2;
+			else if (anz > 0.9) axis = 3;
+			else continue;
+
+			FaceRect fr = new FaceRect();
+			fr.axis = axis;
+
+			// Plane is average coordinate along axis
+			fr.plane = 0.25 * (
+				(axis == 1 ? v[i0][0] + v[i1][0] + v[i2][0] + v[i3][0] :
+				 axis == 2 ? v[i0][1] + v[i1][1] + v[i2][1] + v[i3][1] :
+				            v[i0][2] + v[i1][2] + v[i2][2] + v[i3][2])
+			);
+
+			// Bounds on remaining axes
+			double[] u = new double[4];
+			double[] vv = new double[4];
+			for (int k = 0; k < 4; k++) {
+				int vi = faces[fi][k];
+				if (axis == 1) { u[k] = v[vi][1]; vv[k] = v[vi][2]; }
+				else if (axis == 2) { u[k] = v[vi][0]; vv[k] = v[vi][2]; }
+				else { u[k] = v[vi][0]; vv[k] = v[vi][1]; }
+			}
+			fr.umin = Math.min(Math.min(u[0], u[1]), Math.min(u[2], u[3]));
+			fr.umax = Math.max(Math.max(u[0], u[1]), Math.max(u[2], u[3]));
+			fr.vmin = Math.min(Math.min(vv[0], vv[1]), Math.min(vv[2], vv[3]));
+			fr.vmax = Math.max(Math.max(vv[0], vv[1]), Math.max(vv[2], vv[3]));
+
+			rects.add(fr);
+		}
+
+		return rects;
+	}
+
+	private float[] getWorldMatrix(Element elem)
+	{
+		if (elem == null) return null;
+		java.util.ArrayList<Element> chain = new java.util.ArrayList<Element>();
+		Element cur = elem;
+		while (cur != null) {
+			chain.add(cur);
+			cur = cur.ParentElement;
+		}
+		java.util.Collections.reverse(chain);
+		float[] mat = at.vintagestory.modelcreator.util.Mat4f.Create();
+		for (Element e : chain) {
+			e.ApplyTransform(mat);
+		}
+		return mat;
+	}
+
+	private void applyWorldAxisNudge(Element mover, int worldAxis, double epsilon)
+	{
+		if (mover == null) return;
+		float[] mat = getWorldMatrix(mover);
+		if (mat == null) return;
+
+		// World-space delta
+		double wx = (worldAxis == 1 ? epsilon : 0);
+		double wy = (worldAxis == 2 ? epsilon : 0);
+		double wz = (worldAxis == 3 ? epsilon : 0);
+
+		// Extract rotation (column-major):
+		// [0 4 8]
+		// [1 5 9]
+		// [2 6 10]
+		double r00 = mat[0], r01 = mat[4], r02 = mat[8];
+		double r10 = mat[1], r11 = mat[5], r12 = mat[9];
+		double r20 = mat[2], r21 = mat[6], r22 = mat[10];
+
+		// local = R^T * world
+		double lx = r00 * wx + r10 * wy + r20 * wz;
+		double ly = r01 * wx + r11 * wy + r21 * wz;
+		double lz = r02 * wx + r12 * wy + r22 * wz;
+
+		mover.setStartX(mover.getStartX() + lx);
+		mover.setStartY(mover.getStartY() + ly);
+		mover.setStartZ(mover.getStartZ() + lz);
+	}
+	
+	private Element chooseMover(Element a, Element b)
+	{
+		// Prefer moving the child when elements are parented
+		if (isAncestor(b, a)) return a;
+		if (isAncestor(a, b)) return b;
+		if (a.ParentElement != null) return a;
+		if (b.ParentElement != null) return b;
+		return a;
+	}
+	
+	private boolean isAncestor(Element ancestor, Element child)
+	{
+		Element cur = child != null ? child.ParentElement : null;
+		while (cur != null) {
+			if (cur == ancestor) return true;
+			cur = cur.ParentElement;
+		}
+		return false;
+	}
+	
+	private boolean hasRotationInChain(Element elem)
+	{
+		Element cur = elem;
+		while (cur != null) {
+			if (Math.abs(cur.getRotationX()) > 1e-9 || Math.abs(cur.getRotationY()) > 1e-9 || Math.abs(cur.getRotationZ()) > 1e-9) return true;
+			cur = cur.ParentElement;
+		}
+		return false;
+	}
+	
+	private AABB getWorldAABB(Element elem)
+	{
+		if (elem == null) return null;
+		double sx = 0, sy = 0, sz = 0;
+		Element cur = elem;
+		while (cur != null) {
+			sx += cur.getStartX();
+			sy += cur.getStartY();
+			sz += cur.getStartZ();
+			cur = cur.ParentElement;
+		}
+		AABB box = new AABB();
+		box.minX = sx;
+		box.minY = sy;
+		box.minZ = sz;
+		box.maxX = sx + elem.getWidth();
+		box.maxY = sy + elem.getHeight();
+		box.maxZ = sz + elem.getDepth();
+		return box;
+	}
+	
+	private double overlapLen(double amin, double amax, double bmin, double bmax)
+	{
+		double min = Math.max(amin, bmin);
+		double max = Math.min(amax, bmax);
+		return max - min;
+	}
+
 
 	/**
 	 * Computes the absolute X start translation of an element in root space,
@@ -668,6 +1083,286 @@ private void mirrorSelectedElementsInternal(boolean mirrorOnZ, boolean mirrorAni
 
 	
 
+
+	// ------------------------
+	// Centering tools (Modeling tab)
+	// ------------------------
+	public static enum CenterMode {
+		ON_FLOOR,
+		KEEP_HEIGHT,
+		LITERAL
+	}
+
+	/**
+	 * Centers the current selection on the floor grid.
+	 *
+	 * Rules:
+	 * - If a single element is selected, it is centered.
+	 * - If multiple elements are selected:
+	 *   - If they share a common parent/ancestor, we center the top common ancestor (so children come along).
+	 *   - Otherwise we center all topmost selected hierarchies as a group.
+	 * - Center is computed from the geometric bounds (AABB in root space). Rotation origin is NOT used.
+	 */
+	public void centerSelectedElements(CenterMode mode)
+	{
+		if (tree == null) return;
+		java.util.List<Element> selected = tree.getSelectedElements();
+		if (selected == null || selected.size() == 0) return;
+
+		// Determine move targets and bounds basis.
+		java.util.ArrayList<Element> moveTargets = new java.util.ArrayList<Element>();
+		java.util.ArrayList<Element> boundsRoots = new java.util.ArrayList<Element>();
+
+		if (selected.size() > 1) {
+			Element lca = findLowestCommonAncestor(selected);
+			if (lca != null) {
+				// All selected live under one top object: move that object and use its full volume.
+				moveTargets.add(lca);
+				boundsRoots.add(lca);
+			} else {
+				// Multiple independent hierarchies: move only the topmost selected elements and use their union.
+				java.util.HashSet<Element> selset = new java.util.HashSet<Element>(selected);
+				for (Element e : selected) {
+					boolean hasSelectedParent = false;
+					Element p = e.ParentElement;
+					while (p != null) {
+						if (selset.contains(p)) { hasSelectedParent = true; break; }
+						p = p.ParentElement;
+					}
+					if (!hasSelectedParent) {
+						moveTargets.add(e);
+						boundsRoots.add(e);
+					}
+				}
+			}
+		} else {
+			moveTargets.add(selected.get(0));
+			boundsRoots.add(selected.get(0));
+		}
+
+		if (moveTargets.size() == 0 || boundsRoots.size() == 0) return;
+
+		// Compute root-space bounds (union of hierarchy volumes).
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		for (Element r : boundsRoots) {
+			double[] b = computeHierarchyRootBounds(r);
+			if (b == null) continue;
+			minX = Math.min(minX, b[0]);
+			minY = Math.min(minY, b[1]);
+			minZ = Math.min(minZ, b[2]);
+			maxX = Math.max(maxX, b[3]);
+			maxY = Math.max(maxY, b[4]);
+			maxZ = Math.max(maxZ, b[5]);
+		}
+
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return;
+
+		double cx = (minX + maxX) / 2.0;
+		double cy = (minY + maxY) / 2.0;
+		double cz = (minZ + maxZ) / 2.0;
+
+		// Grid center is at (8, 0, 8) in model space.
+		double dx = 8.0 - cx;
+		double dz = 8.0 - cz;
+		double dy = 0.0;
+
+		switch (mode) {
+			case ON_FLOOR:
+				dy = 0.0 - minY;
+				break;
+			case LITERAL:
+				dy = 0.0 - cy;
+				break;
+			case KEEP_HEIGHT:
+			default:
+				dy = 0.0;
+				break;
+		}
+
+		// Apply translation in WORLD space to each move target, converting into local Start deltas.
+		for (Element e : moveTargets) {
+			if (e == null) continue;
+			double[] map = computeWorldAxisToLocalMap(e);
+			if (map == null || map.length < 9) {
+				// Fallback: treat local as world.
+				e.setStartX(e.getStartX() + dx);
+				e.setStartY(e.getStartY() + dy);
+				e.setStartZ(e.getStartZ() + dz);
+			} else {
+				double ldx = dx * map[0] + dy * map[3] + dz * map[6];
+				double ldy = dx * map[1] + dy * map[4] + dz * map[7];
+				double ldz = dx * map[2] + dy * map[5] + dz * map[8];
+				e.setStartX(e.getStartX() + ldx);
+				e.setStartY(e.getStartY() + ldy);
+				e.setStartZ(e.getStartZ() + ldz);
+			}
+		}
+
+		SelectedElement = tree.getSelectedElement();
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
+		ModelCreator.DidModify();
+	}
+
+	private static Element findLowestCommonAncestor(java.util.List<Element> elems)
+	{
+		if (elems == null || elems.size() < 2) return null;
+
+		java.util.ArrayList<Element> basePath = new java.util.ArrayList<Element>();
+		basePath.addAll(elems.get(0).GetParentPath());
+		basePath.add(elems.get(0)); // include self
+
+		int commonLen = basePath.size();
+		for (int i = 1; i < elems.size(); i++) {
+			Element e = elems.get(i);
+			java.util.ArrayList<Element> path = new java.util.ArrayList<Element>();
+			path.addAll(e.GetParentPath());
+			path.add(e);
+
+			int n = Math.min(commonLen, path.size());
+			int j = 0;
+			for (; j < n; j++) {
+				if (basePath.get(j) != path.get(j)) break;
+			}
+			commonLen = j;
+			if (commonLen == 0) return null;
+		}
+
+		Element lca = basePath.get(commonLen - 1);
+		// If the LCA is null or if it does not actually cover all selected (shouldn't happen), return null.
+		return lca;
+	}
+
+	private static double[] computeHierarchyRootBounds(Element root)
+	{
+		if (root == null) return null;
+
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		java.util.ArrayDeque<Element> stack = new java.util.ArrayDeque<Element>();
+		stack.push(root);
+		while (!stack.isEmpty()) {
+			Element e = stack.pop();
+			if (e == null) continue;
+
+			double[] b = computeElementRootBounds(e);
+			if (b != null) {
+				minX = Math.min(minX, b[0]);
+				minY = Math.min(minY, b[1]);
+				minZ = Math.min(minZ, b[2]);
+				maxX = Math.max(maxX, b[3]);
+				maxY = Math.max(maxY, b[4]);
+				maxZ = Math.max(maxZ, b[5]);
+			}
+
+			if (e.ChildElements != null) {
+				for (int i = 0; i < e.ChildElements.size(); i++) {
+					stack.push(e.ChildElements.get(i));
+				}
+			}
+		}
+
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return null;
+		return new double[] { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	private static double[] computeElementRootBounds(Element elem)
+	{
+		if (elem == null) return null;
+
+		float[] mat = at.vintagestory.modelcreator.util.Mat4f.Identity_(new float[16]);
+
+		// Apply parent transforms first (root -> parent)
+		java.util.List<Element> path = elem.GetParentPath();
+		if (path != null) {
+			for (Element p : path) {
+				applyTransformNoAnim(mat, p);
+			}
+		}
+		// Apply this element's transform
+		applyTransformNoAnim(mat, elem);
+
+		double w = elem.getWidth();
+		double h = elem.getHeight();
+		double d = elem.getDepth();
+
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		double[][] corners = new double[][] {
+			{0, 0, 0}, {w, 0, 0}, {0, h, 0}, {0, 0, d},
+			{w, h, 0}, {w, 0, d}, {0, h, d}, {w, h, d}
+		};
+
+		for (double[] c : corners) {
+			float[] out = at.vintagestory.modelcreator.util.Mat4f.MulWithVec4(mat, new float[] { (float)c[0], (float)c[1], (float)c[2], 1f });
+			double x = out[0];
+			double y = out[1];
+			double z = out[2];
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			minZ = Math.min(minZ, z);
+			maxX = Math.max(maxX, x);
+			maxY = Math.max(maxY, y);
+			maxZ = Math.max(maxZ, z);
+		}
+
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return null;
+		return new double[] { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	private static void applyTransformNoAnim(float[] mat, Element elem)
+	{
+		if (elem == null) return;
+		at.vintagestory.modelcreator.util.Mat4f.Translate(mat, mat, new float[] { (float)elem.getOriginX(), (float)elem.getOriginY(), (float)elem.getOriginZ() });
+		at.vintagestory.modelcreator.util.Mat4f.RotateX(mat, mat, (float)elem.getRotationX() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+		at.vintagestory.modelcreator.util.Mat4f.RotateY(mat, mat, (float)elem.getRotationY() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+		at.vintagestory.modelcreator.util.Mat4f.RotateZ(mat, mat, (float)elem.getRotationZ() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+		at.vintagestory.modelcreator.util.Mat4f.Translate(mat, mat, new float[] { (float)-elem.getOriginX(), (float)-elem.getOriginY(), (float)-elem.getOriginZ() });
+
+		at.vintagestory.modelcreator.util.Mat4f.Translate(mat, mat, new float[] { (float)elem.getStartX(), (float)elem.getStartY(), (float)elem.getStartZ() });
+	}
+
+	private static double[] computeWorldAxisToLocalMap(Element elem)
+	{
+		float[] m = buildRotationMatrixToElement(elem);
+		double c0x = m[0],  c0y = m[1],  c0z = m[2];
+		double c1x = m[4],  c1y = m[5],  c1z = m[6];
+		double c2x = m[8],  c2y = m[9],  c2z = m[10];
+
+		double[] out = new double[9];
+		out[0] = c0x; out[1] = c1x; out[2] = c2x;
+		out[3] = c0y; out[4] = c1y; out[5] = c2y;
+		out[6] = c0z; out[7] = c1z; out[8] = c2z;
+		return out;
+	}
+
+	private static float[] buildRotationMatrixToElement(Element elem)
+	{
+		float[] mat = at.vintagestory.modelcreator.util.Mat4f.Identity_(new float[16]);
+		if (elem == null) return mat;
+		java.util.ArrayList<Element> chain = new java.util.ArrayList<Element>();
+		Element cur = elem;
+		while (cur != null) {
+			chain.add(0, cur);
+			cur = cur.ParentElement;
+		}
+		for (Element e : chain) {
+			float ox = (float)e.getOriginX();
+			float oy = (float)e.getOriginY();
+			float oz = (float)e.getOriginZ();
+			at.vintagestory.modelcreator.util.Mat4f.Translate(mat, mat, new float[] { ox, oy, oz });
+			at.vintagestory.modelcreator.util.Mat4f.RotateX(mat, mat, (float)e.getRotationX() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+			at.vintagestory.modelcreator.util.Mat4f.RotateY(mat, mat, (float)e.getRotationY() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+			at.vintagestory.modelcreator.util.Mat4f.RotateZ(mat, mat, (float)e.getRotationZ() * at.vintagestory.modelcreator.util.GameMath.DEG2RAD);
+			at.vintagestory.modelcreator.util.Mat4f.Translate(mat, mat, new float[] { -ox, -oy, -oz });
+		}
+		return mat;
+	}
+
+
 public void removeCurrentElement() {
 	ModelCreator.ignoreDidModify++;
 
@@ -801,6 +1496,8 @@ public void removeCurrentElement() {
 	{
 		tree.selectElement(element);
 		SelectedElement = tree.getSelectedElement();
+		// Keep multi-selection in sync even when clearing selection.
+		SelectedElements = new ArrayList<Element>(tree.getSelectedElements());
 		ModelCreator.updateValues(null);
 	}
 	
@@ -1023,18 +1720,223 @@ public void removeCurrentElement() {
 	
 	
 	public void reloadExternalTexture(TextureEntry entry) throws IOException {
-		FileInputStream is = new FileInputStream(entry.getFilePath());
-		Texture texture = TextureLoader.getTexture("PNG", is);
-		is.close();
+		String path = entry.getFilePath();
+		String lc = path == null ? "" : path.toLowerCase(Locale.ROOT);
+		boolean isRef = "refimage".equals(entry.code);
 		
-		if (texture.getImageHeight() % 8 != 0 | texture.getImageWidth() % 8 != 0)
+		// Normal textures in VSMC are PNG-only. The reference image supports PNG/JPG.
+		String format;
+		if (lc.endsWith(".jpg") || lc.endsWith(".jpeg")) {
+			format = isRef ? "JPG" : null;
+		} else {
+			format = "PNG";
+		}
+		
+		if (format == null) return;
+		
+		FileInputStream is = new FileInputStream(path);
+		Texture texture = null;
+		try {
+			texture = TextureLoader.getTexture(format, is);
+		} finally {
+			try { is.close(); } catch (Exception e) {}
+		}
+		
+		// Keep the original size constraints for normal textures, but don't block reference images.
+		if (!isRef && (texture.getImageHeight() % 8 != 0 || texture.getImageWidth() % 8 != 0))
 		{
 			texture.release();
 			return;
 		}
 		
-		entry.icon = upscaleIcon(new ImageIcon(entry.getFilePath()), 256);
+		texture.setTextureFilter(SGL.GL_NEAREST);
+		entry.icon = upscaleIcon(new ImageIcon(path), 256);
 		entry.texture = texture;
+		entry.Width = texture.getImageWidth();
+		entry.Height = texture.getImageHeight();
+	}
+
+	/**
+	 * Creates/updates a "Ref_Image" plane element that shows the already-loaded
+	 * reference image texture stored under <code>texCode</code> (usually "refimage").
+	 *
+	 * NOTE: Texture upload must happen on the render thread. This method is safe to
+	 * call from the Swing thread after the texture has been loaded via PendingTexture.
+	 */
+	public String applyReferenceImagePlane(String texCode)
+	{
+		if (texCode == null || texCode.length() == 0) texCode = "refimage";
+
+		TextureEntry entry = TexturesByCode.get(texCode);
+		if (entry == null) return "Reference image texture was not loaded.";
+
+		int imgW = Math.max(1, entry.Width);
+		int imgH = Math.max(1, entry.Height);
+
+		int[] dims = pickBestAspectDims(imgW, imgH, 16);
+		int planeW = dims[0];
+		int planeH = dims[1];
+
+		// Tell the UV system that this texture is planeW x planeH "voxels" large,
+		// so that a 0..planeW/0..planeH UV covers the whole image.
+		TextureSizes.put(texCode, new int[] { planeW, planeH });
+
+		ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+		Element refElem = findRootElementByName("Ref_Image");
+		boolean created = false;
+		if (refElem == null) {
+			refElem = new Element(planeW, planeH);
+			refElem.setName("Ref_Image");
+			refElem.setStartX(0);
+			refElem.setStartY(0);
+			refElem.setStartZ(-10.5);
+			refElem.setDepth(1);
+			// Add without auto-renaming (EnsureUniqueElementName) so we can reliably find/update it later
+			refElem.ParentElement = null;
+			rootElements.add(refElem);
+			if (tree != null) {
+				tree.addRootElement(refElem);
+			}
+			created = true;
+		} else {
+			refElem.setWidth(planeW);
+			refElem.setHeight(planeH);
+			refElem.setStartX(0);
+			refElem.setStartY(0);
+			refElem.setStartZ(-10.5);
+			refElem.setDepth(1);
+		}
+
+		// Ensure this is a single-face plane (south face only)
+		Face[] faces = refElem.getAllFaces();
+		for (int i = 0; i < faces.length; i++) {
+			faces[i].setEnabled(i == 2);
+		}
+		Face south = faces[2];
+		south.setTextureCode(texCode);
+		south.setStartU(0);
+		south.setStartV(0);
+		south.setRotation(0);
+		// Keep auto UV so it follows the element size
+		south.setAutoUVEnabled(true);
+		refElem.updateUV();
+
+		// Select the reference plane when first created, otherwise keep the current selection.
+		if (created && tree != null) {
+			tree.selectElement(refElem);
+			SelectedElement = refElem;
+		}
+
+		ModelCreator.DidModify();
+		ModelCreator.updateValues(null);
+		if (tree != null) tree.updateUI();
+		ModelCreator.changeHistory.endMultichangeHistoryState(this);
+
+		return null;
+	}
+
+	private Element findRootElementByName(String name)
+	{
+		for (Element elem : rootElements) {
+			if (name.equals(elem.getName())) return elem;
+		}
+		return null;
+	}
+
+	private static int[] pickBestAspectDims(int imgW, int imgH, int maxDim)
+	{
+		double target = (double)imgW / (double)imgH;
+		int bestW = 16;
+		int bestH = 16;
+		double bestErr = Double.MAX_VALUE;
+
+		for (int w = 1; w <= maxDim; w++) {
+			for (int h = 1; h <= maxDim; h++) {
+				double ratio = (double)w / (double)h;
+				double err = Math.abs(ratio - target);
+				if (err < bestErr) {
+					bestErr = err;
+					bestW = w;
+					bestH = h;
+				}
+			}
+		}
+
+		// Prefer exact reductions when possible (e.g. 1920x1080 -> 16x9)
+		int g = gcd(imgW, imgH);
+		int rw = imgW / g;
+		int rh = imgH / g;
+		int scale = Math.max(rw, rh) == 0 ? 1 : (maxDim / Math.max(rw, rh));
+		if (scale >= 1) {
+			rw *= scale;
+			rh *= scale;
+			if (rw >= 1 && rh >= 1 && rw <= maxDim && rh <= maxDim) {
+				bestW = rw;
+				bestH = rh;
+			}
+		}
+
+		return new int[] { bestW, bestH };
+	}
+
+	private static int gcd(int a, int b)
+	{
+		a = Math.abs(a);
+		b = Math.abs(b);
+		while (b != 0) {
+			int t = a % b;
+			a = b;
+			b = t;
+		}
+		return a == 0 ? 1 : a;
+	}
+
+	public String loadReferenceTexture(String textureCode, File image, BooleanParam isNew, String projectType) throws IOException
+	{
+		String path = image.getAbsolutePath();
+		String lc = path.toLowerCase(Locale.ROOT);
+		String format = lc.endsWith(".jpg") || lc.endsWith(".jpeg") ? "JPG" : "PNG";
+
+		Texture texture = null;
+		FileInputStream is = new FileInputStream(image);
+		try {
+			texture = TextureLoader.getTexture(format, is);
+		} catch (Throwable e) {
+			// Fallback: decode through ImageIO, then encode as PNG and feed the PNG decoder.
+			// This makes JPG support reliable even on setups where Slick's JPG loader is missing.
+			try {
+				BufferedImage bi = ImageIO.read(image);
+				if (bi == null) {
+					return "Unable to load this image. Supported: PNG, JPG.";
+				}
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				ImageIO.write(bi, "png", baos);
+				baos.flush();
+				ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+				texture = TextureLoader.getTexture("PNG", bais);
+			} catch (Throwable e2) {
+				return "Unable to load this image. Supported: PNG, JPG.";
+			}
+		} finally {
+			try { is.close(); } catch (Exception e) {}
+		}
+
+		texture.setTextureFilter(SGL.GL_NEAREST);
+		ImageIcon icon = upscaleIcon(new ImageIcon(image.getAbsolutePath()), 256);
+
+		if (textureCode == null || textureCode.length() == 0) {
+			textureCode = "refimage";
+		}
+
+		TextureEntry prev = TexturesByCode.get(textureCode);
+		if (prev != null) {
+			try { prev.Dispose(); } catch (Exception e) {}
+		}
+
+		TexturesByCode.put(textureCode, new TextureEntry(textureCode, texture, icon, image.getAbsolutePath(), projectType));
+		isNew.Value = prev == null;
+		return null;
 	}
 	
 

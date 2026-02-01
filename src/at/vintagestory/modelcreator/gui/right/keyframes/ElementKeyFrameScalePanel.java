@@ -125,6 +125,9 @@ public class ElementKeyFrameScalePanel extends JPanel implements IValueUpdater
 			}
 
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 
 		xScaleField.addFocusListener(new FocusListenerImpl() {
@@ -167,6 +170,9 @@ public class ElementKeyFrameScalePanel extends JPanel implements IValueUpdater
 			}
 
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 
 		yScaleField.addFocusListener(new FocusListenerImpl() {
@@ -209,6 +215,9 @@ public class ElementKeyFrameScalePanel extends JPanel implements IValueUpdater
 			}
 
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 
 		zScaleField.addFocusListener(new FocusListenerImpl() {
@@ -289,6 +298,8 @@ public class ElementKeyFrameScalePanel extends JPanel implements IValueUpdater
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 
 			keyFramesPanel.copyKeyFrameElemToBackdrop(elem);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(keyFrameElem, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
 		});
 
 	}
@@ -318,6 +329,8 @@ public class ElementKeyFrameScalePanel extends JPanel implements IValueUpdater
 
 		ModelCreator.updateValues(null);
 		keyFramesPanel.copyKeyFrameElemToBackdrop(elem.AnimatedElement);
+		AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(elem, null);
+		if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
 	}
 
 	private void addComponents()

@@ -12,9 +12,7 @@ import at.vintagestory.modelcreator.model.Element;
 
 /**
  * Select all elements.
- *
  * 'A' key (no modifiers) now selects all, in Cube (modeling) and Keyframe (animation) modes.
- * 
  */
 public class CommandSelectAll implements ProjectCommand
 {
@@ -30,11 +28,18 @@ public class CommandSelectAll implements ProjectCommand
 		Component focus = KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
 		if (focus instanceof JTextComponent) return;
 
-		// Only in Cube and Keyframe tabs
+		// Face (UVs) tab: select all UVs
+		if (ModelCreator.currentRightTab == 1) {
+			if (ModelCreator.Instance != null && ModelCreator.Instance.uvSidebar instanceof at.vintagestory.modelcreator.gui.left.LeftUVSidebar) {
+				((at.vintagestory.modelcreator.gui.left.LeftUVSidebar)ModelCreator.Instance.uvSidebar).selectAllUvs();
+			}
+			return;
+		}
+
+		// Cube (Modeling) and Keyframe (Animation) tabs: select all elements
 		if (ModelCreator.currentRightTab != 0 && ModelCreator.currentRightTab != 2) return;
 		if (ModelCreator.currentProject == null || ModelCreator.currentProject.tree == null) return;
 
-		// Select all tree elements and update the project's selection state
 		ModelCreator.ignoreValueUpdates = true;
 		ModelCreator.currentProject.tree.selectAllElements();
 		ModelCreator.ignoreValueUpdates = false;

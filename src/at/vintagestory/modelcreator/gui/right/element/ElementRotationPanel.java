@@ -48,7 +48,8 @@ public class ElementRotationPanel extends JPanel implements IValueUpdater
 		rotationSliders = new JSlider[3];
 		
 		this.manager = manager;
-		setMaximumSize(new Dimension(186, 270));
+		int w = Math.max(186, ModelCreator.prefs.getInt("rightBarWidth", 260) - 35);
+		setMaximumSize(new Dimension(w, 270));
 		
 		initComponents();
 	}
@@ -112,7 +113,8 @@ public class ElementRotationPanel extends JPanel implements IValueUpdater
 		rotationSliders[num].setPaintTicks(true);
 		rotationSliders[num].setPaintLabels(true);
 		rotationSliders[num].setLabelTable(getLabelTable());
-		rotationSliders[num].setPreferredSize(new Dimension(160, 40));
+		int sliderW = Math.max(160, ModelCreator.prefs.getInt("rightBarWidth", 260) - 105);
+		rotationSliders[num].setPreferredSize(new Dimension(sliderW, 40));
 		rotationSliders[num].addMouseListener(new SliderMouseHandler());
 		
 		rotationSliders[num].addChangeListener(e ->

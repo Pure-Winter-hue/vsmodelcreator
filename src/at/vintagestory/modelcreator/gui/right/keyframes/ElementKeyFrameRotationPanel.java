@@ -29,6 +29,8 @@ import at.vintagestory.modelcreator.interfaces.IValueUpdater;
 import at.vintagestory.modelcreator.model.Face;
 import at.vintagestory.modelcreator.model.FocusListenerImpl;
 import at.vintagestory.modelcreator.model.AnimFrameElement;
+import at.vintagestory.modelcreator.model.Element;
+import at.vintagestory.modelcreator.model.Animation;
 import at.vintagestory.modelcreator.util.AwtUtil;
 import at.vintagestory.modelcreator.util.Parser;
 
@@ -64,7 +66,8 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 		rotationSliders = new JSlider[3];
 		
 		this.keyFramesPanel = keyFramesPanel;
-		setMaximumSize(new Dimension(186, 270));
+		int w = Math.max(186, ModelCreator.prefs.getInt("rightBarWidth", 260) - 35);
+		setMaximumSize(new Dimension(w, 270));
 		
 		initComponents();
 	}
@@ -85,7 +88,18 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 		
 		add(slidersPanel);		
 	}
-	
+
+
+	private java.util.List<Element> getSelectedElementsSafe() {
+		if (ModelCreator.rightTopPanel == null) return java.util.Collections.emptyList();
+		java.util.List<Element> selected = ModelCreator.rightTopPanel.getSelectedElements();
+		if (selected == null || selected.size() == 0) {
+			Element lead = ModelCreator.rightTopPanel.getCurrentElement();
+			return lead == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(lead);
+		}
+		return selected;
+	}
+
 	
 	
 	void AddRotationPanel(String axis, int num, JPanel sliderPanel, SpringLayout layout) {
@@ -116,23 +130,30 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 		AwtUtil.addChangeListener(rotationFields[num], e -> {
 			if (ignoreSliderChanges || !rotationFieldsListenEdit[num]) return;
 						
-			keyFramesPanel.ensureAnimationExists();	
-			
-			AnimFrameElement element = keyFramesPanel.getCurrentElement();
-			if (element == null) return;
+			keyFramesPanel.ensureAnimationExists();
+			java.util.List<Element> selected = getSelectedElementsSafe();
 			if (rotationFields[num].getText().length() == 0) return;
-			
 			if (!Parser.isDouble(rotationFields[num].getText())) return;
 			double newRotation = Parser.parseDouble(rotationFields[num].getText(), 0);
 			
+			Animation anim = ModelCreator.currentProject == null ? null : ModelCreator.currentProject.SelectedAnimation;
+			if (anim == null) return;
 			
-			if (num == 0) { if (element.getRotationX() == newRotation) return; element.setRotationX(newRotation); }
-			if (num == 1) { if (element.getRotationY() == newRotation) return; element.setRotationY(newRotation); }
-			if (num == 2) { if (element.getRotationZ() == newRotation) return; element.setRotationZ(newRotation); }
+			ModelCreator.changeHistory.beginMultichangeHistoryState();
+			for (Element el : selected) {
+				if (el == null) continue;
+				AnimFrameElement kf = anim.ToggleRotation(el, true);
+				if (num == 0) kf.setRotationX(newRotation);
+				if (num == 1) kf.setRotationY(newRotation);
+				if (num == 2) kf.setRotationZ(newRotation);
+				keyFramesPanel.copyKeyFrameElemToBackdrop(el);
+				AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(kf, selected);
+				if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+			}
+			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+			
 			ModelCreator.updateValues(rotationFields[num]);
-			
-			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
-		});
+});
 		
 		
 		rotationFields[num].addMouseWheelListener(new MouseWheelListener()
@@ -154,7 +175,8 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 		rotationSliders[num].setPaintTicks(true);
 		rotationSliders[num].setPaintLabels(true);
 		rotationSliders[num].setLabelTable(getLabelTable());
-		rotationSliders[num].setPreferredSize(new Dimension(160, 40));
+		int sliderW = Math.max(160, ModelCreator.prefs.getInt("rightBarWidth", 260) - 105);
+		rotationSliders[num].setPreferredSize(new Dimension(sliderW, 40));
 		rotationSliders[num].addMouseListener(new SliderMouseHandler());
 		
 		rotationSliders[num].addFocusListener(new FocusListenerImpl()
@@ -178,26 +200,27 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 			keyFramesPanel.ensureAnimationExists();
 			
 			double newValue = multiplier * rotationSliders[num].getValue();
-			
 			rotationFields[num].setText(""+newValue);
 			
-			AnimFrameElement elem = keyFramesPanel.getCurrentElement();
-			if (elem == null) return;
+			java.util.List<Element> selected = getSelectedElementsSafe();
+			Animation anim = ModelCreator.currentProject == null ? null : ModelCreator.currentProject.SelectedAnimation;
+			if (anim == null) return;
 			
-			if (num == 0) {
-				elem.setRotationX(newValue);
+			ModelCreator.changeHistory.beginMultichangeHistoryState();
+			for (Element el : selected) {
+				if (el == null) continue;
+				AnimFrameElement kf = anim.ToggleRotation(el, true);
+				if (num == 0) kf.setRotationX(newValue);
+				if (num == 1) kf.setRotationY(newValue);
+				if (num == 2) kf.setRotationZ(newValue);
+				keyFramesPanel.copyKeyFrameElemToBackdrop(el);
+				AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(kf, selected);
+				if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
 			}
-			if (num == 1) {
-				elem.setRotationY(newValue);
-			}
-			if (num == 2) {
-				elem.setRotationZ(newValue);
-			}
+			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 			
 			ModelCreator.updateValues(rotationSliders[num]);
-			
-			keyFramesPanel.copyKeyFrameElemToBackdrop(elem.AnimatedElement);
-		});
+});
 		
 
 		sliderPanel.add(rotationSliders[num]);
@@ -218,33 +241,49 @@ public class ElementKeyFrameRotationPanel extends JPanel implements IValueUpdate
 		
 		keyFramesPanel.ensureAnimationExists();
 		
-		AnimFrameElement elem = keyFramesPanel.getCurrentElement();
-		if (elem == null) return;		
-		float size = direction * ((modifiers & ActionEvent.SHIFT_MASK) == 1 ? 0.1f : 1f);
+		java.util.List<Element> selected = getSelectedElementsSafe();
+		Animation anim = ModelCreator.currentProject == null ? null : ModelCreator.currentProject.SelectedAnimation;
+		if (anim == null) return;
+		
+		float size = direction * (((modifiers & ActionEvent.SHIFT_MASK) == 1) ? 0.1f : 1f);
 		double newValue;
 		
-		switch (num) {
-		case 0:
-			newValue = elem.getRotationX() + size;
-			elem.setRotationX(newValue);
-			rotationFields[num].setText(""+df.format(newValue));
-			break;
-		case 1:
-			newValue = elem.getRotationY() + size;
-			elem.setRotationY(newValue);
-			rotationFields[num].setText(""+df.format(newValue));
-			break;
-		default:
-			newValue = elem.getRotationZ() + size;
-			elem.setRotationZ(newValue);
-			rotationFields[num].setText(""+df.format(newValue));
-			break;
+		ModelCreator.changeHistory.beginMultichangeHistoryState();
+		for (Element el : selected) {
+			if (el == null) continue;
+			AnimFrameElement kf = anim.ToggleRotation(el, true);
+			switch (num) {
+			case 0:
+				newValue = kf.getRotationX() + size;
+				kf.setRotationX(newValue);
+				break;
+			case 1:
+				newValue = kf.getRotationY() + size;
+				kf.setRotationY(newValue);
+				break;
+			default:
+				newValue = kf.getRotationZ() + size;
+				kf.setRotationZ(newValue);
+				break;
+			}
+			keyFramesPanel.copyKeyFrameElemToBackdrop(el);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(kf, selected);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+		}
+		ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
+		
+		// Update UI fields based on the lead element
+		AnimFrameElement lead = keyFramesPanel.getCurrentElement();
+		if (lead != null) {
+			switch (num) {
+			case 0: rotationFields[num].setText("" + df.format(lead.getRotationX())); break;
+			case 1: rotationFields[num].setText("" + df.format(lead.getRotationY())); break;
+			default: rotationFields[num].setText("" + df.format(lead.getRotationZ())); break;
+			}
 		}
 		
 		ModelCreator.updateValues(rotationSliders[num]);
-		
-		keyFramesPanel.copyKeyFrameElemToBackdrop(elem.AnimatedElement);
-	}
+}
 	
 
 	@Override

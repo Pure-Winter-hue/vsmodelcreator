@@ -9,8 +9,14 @@ import java.awt.*;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
 import java.awt.dnd.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
@@ -32,6 +38,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.tree.DefaultMutableTreeNode;
@@ -57,6 +64,7 @@ import at.vintagestory.modelcreator.gui.right.face.FaceTexturePanel;
 import at.vintagestory.modelcreator.input.InputManager;
 import at.vintagestory.modelcreator.input.command.FactoryProjectCommand;
 import at.vintagestory.modelcreator.input.command.CommandSelectAll;
+import at.vintagestory.modelcreator.input.command.CommandToggleViewportGizmoMode;
 import at.vintagestory.modelcreator.input.command.ProjectCommand;
 import at.vintagestory.modelcreator.input.key.InputKeyEvent;
 import at.vintagestory.modelcreator.input.listener.ListenerKeyPressInterval;
@@ -73,6 +81,7 @@ import at.vintagestory.modelcreator.model.PendingTexture;
 import at.vintagestory.modelcreator.model.TextureEntry;
 import at.vintagestory.modelcreator.util.GameMath;
 import at.vintagestory.modelcreator.util.Mat4f;
+import at.vintagestory.modelcreator.util.QUtil;
 import at.vintagestory.modelcreator.util.screenshot.AnimationCapture;
 import at.vintagestory.modelcreator.util.screenshot.PendingScreenshot;
 import at.vintagestory.modelcreator.util.screenshot.ScreenshotCapture;
@@ -98,10 +107,24 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	public static boolean ignoreFrameUpdates = false;
 	public static boolean showGrid = true;
 	public static boolean showTreadmill = false;
+	public static boolean mirrorMode = false;
 	public static boolean showShade = true;
 	public static boolean transparent = true;
 	public static boolean renderTexture = true;
 	public static boolean autoreloadTexture = true;
+	public static boolean autofixZFighting = false;
+	public static boolean childrenInheritRenderPass = true;
+	public static final int MAX_RECENT_FILES = 12;
+	/**
+	 * Nudge distance used by the "Autofix Z-Fighting" feature.
+	 *
+	 * The modeler uses a 0..16-ish coordinate space (aka "pixel" units). The requested
+	 * +0.001 is intended in block units, which corresponds to 0.001 * 16 = 0.016 here.
+	 * This also makes the adjustment large enough to be depth-buffer effective.
+	 */
+	// Amount to nudge along the detected axis when fixing coplanar faces.
+	// Uses the model's coordinate space (0..16 per block).
+	public static final double autofixZFightingEpsilon = 0.001;
 	public static boolean repositionWhenReparented = true;
 	public static boolean darkMode = false;
 	public static boolean saratyMode = false;
@@ -118,14 +141,40 @@ public class ModelCreator extends JFrame implements ITextureCallback
 	// When true, the translate gizmo uses camera-relative movement (legacy behavior). When false, it uses world axes.
 	public static boolean viewportFreedomModeEnabled = false;
 
+	// Viewport transform gizmo mode: Move / Rotate / Scale (toggle with 'Q')
+	public static final int VIEWPORT_GIZMO_MODE_MOVE = 0;
+	public static final int VIEWPORT_GIZMO_MODE_ROTATE = 1;
+	public static final int VIEWPORT_GIZMO_MODE_SCALE = 2;
+	public static int viewportGizmoMode = VIEWPORT_GIZMO_MODE_MOVE;
+	// When true, hides the viewport transform gizmo overlays and disables gizmo interaction (persisted)
+	public static boolean viewportGizmoHidden = false;
+
 	// Whether the viewport translate gizmo center circle handle is enabled (persisted)
 	public static boolean viewportCenterCircleEnabled = true;
 	// Radius (px) of the viewport translate gizmo center circle (persisted)
 	public static int viewportCenterCircleRadius = 18;
 
+	// Floor grid tiling for the 3D viewport (1 = original single 16x16 tile)
+	public static int viewportFloorGridRows = 1;
+	public static int viewportFloorGridCols = 1;
+
+	// Optional block-visualization overlays for the floor grid
+	public static boolean viewportShowBlocksFloor = false;
+	public static boolean viewportShowBlocksAir = false;
+	// How many block layers to outline above (>=0) and below (>=0) the floor plane
+	public static int viewportAirBlocksAbove = 0;
+	public static int viewportAirBlocksBelow = 0;
+
 	// Canvas Variables
 	private final static AtomicReference<Dimension> newCanvasSize = new AtomicReference<Dimension>();
 	public static Canvas canvas;
+	// HiDPI UI scale factor used for the OpenGL canvas (canvas pixel size = panel size * scale).
+	public static double viewportUiScale = 1.0;
+	// Container panel that owns the OpenGL canvas (null layout). Used for placing temporary overlay widgets.
+	public static JPanel canvasContainerPanel;
+	// Inline editor used for numeric entry in viewport sidebar (created lazily).
+	private static JTextField viewportInlineNumberField;
+	private static java.util.function.Consumer<String> viewportInlineNumberCommit;
 	public int canvWidth = 990, canvHeight = 700;
 
 	// Swing Components
@@ -162,7 +211,7 @@ public class ModelCreator extends JFrame implements ITextureCallback
 
 	
 	public LeftSidebar uvSidebar;
-	public LeftSidebar viewportSidebar;
+	public at.vintagestory.modelcreator.gui.left.LeftViewportSidebar viewportSidebar;
 	public static GuiMenu guiMain;
 	public static LeftKeyFramesPanel leftKeyframesPanel;
 	
@@ -193,6 +242,22 @@ public static boolean renderAttachmentPoints;
 		if (type == "mountbackdrop") return currentMountBackdropProject;
 		return currentProject;
 	}
+
+	public static void setViewportGizmoMode(int mode)
+	{
+		if (mode != VIEWPORT_GIZMO_MODE_MOVE && mode != VIEWPORT_GIZMO_MODE_ROTATE && mode != VIEWPORT_GIZMO_MODE_SCALE) {
+			mode = VIEWPORT_GIZMO_MODE_MOVE;
+		}
+		viewportGizmoMode = mode;
+		prefs.putInt("viewportGizmoMode", viewportGizmoMode);
+	}
+
+	public static void toggleViewportGizmoMode()
+	{
+		int next = viewportGizmoMode + 1;
+		if (next > VIEWPORT_GIZMO_MODE_SCALE) next = VIEWPORT_GIZMO_MODE_MOVE;
+		setViewportGizmoMode(next);
+	}
 	
 	public ModelCreator(String title, String[] args) throws LWJGLException
 	{
@@ -209,17 +274,43 @@ public static boolean renderAttachmentPoints;
 		darkMode = prefs.getBoolean("darkMode", false);
 		noTexScale = prefs.getFloat("noTexScale", 2);
 		autoreloadTexture = prefs.getBoolean("autoreloadTexture", true);
+		autofixZFighting = prefs.getBoolean("autofixZFighting", false);
+		childrenInheritRenderPass = prefs.getBoolean("childrenInheritRenderPass", true);
 		repositionWhenReparented = prefs.getBoolean("repositionWhenReparented", true);
 		elementTreeHeight = prefs.getInt("elementTreeHeight", 240);
 		viewportAxisLineThickness = prefs.getInt("viewportAxisLineThickness", 10);
 		viewportAxisLineLength = prefs.getInt("viewportAxisLineLength", 110);
 		viewportFreedomModeEnabled = prefs.getBoolean("viewportFreedomModeEnabled", false);
+		viewportGizmoMode = prefs.getInt("viewportGizmoMode", VIEWPORT_GIZMO_MODE_MOVE);
+		viewportGizmoHidden = prefs.getBoolean("viewportGizmoHidden", false);
+		if (viewportGizmoMode != VIEWPORT_GIZMO_MODE_MOVE && viewportGizmoMode != VIEWPORT_GIZMO_MODE_ROTATE && viewportGizmoMode != VIEWPORT_GIZMO_MODE_SCALE) {
+			viewportGizmoMode = VIEWPORT_GIZMO_MODE_MOVE;
+		}
 		viewportAxisLineThickness = Math.max(2, Math.min(40, viewportAxisLineThickness));
 		viewportAxisLineLength = Math.max(40, Math.min(260, viewportAxisLineLength));
 
 		viewportCenterCircleEnabled = prefs.getBoolean("viewportCenterCircleEnabled", true);
 		viewportCenterCircleRadius = prefs.getInt("viewportCenterCircleRadius", 18);
 		viewportCenterCircleRadius = Math.max(6, Math.min(60, viewportCenterCircleRadius));
+		viewportFloorGridRows = prefs.getInt("viewportFloorGridRows", 1);
+		viewportFloorGridCols = prefs.getInt("viewportFloorGridCols", 1);
+		viewportFloorGridRows = Math.max(1, Math.min(10, viewportFloorGridRows));
+		viewportFloorGridCols = Math.max(1, Math.min(10, viewportFloorGridCols));
+		viewportShowBlocksFloor = prefs.getBoolean("viewportShowBlocksFloor", false);
+		viewportShowBlocksAir = prefs.getBoolean("viewportShowBlocksAir", false);
+		viewportAirBlocksAbove = prefs.getInt("viewportAirBlocksAbove", 0);
+		viewportAirBlocksBelow = prefs.getInt("viewportAirBlocksBelow", 0);
+		viewportAirBlocksAbove = Math.max(0, Math.min(10, viewportAirBlocksAbove));
+		viewportAirBlocksBelow = Math.max(0, Math.min(10, viewportAirBlocksBelow));
+
+		viewportGridSnapEnabled = prefs.getBoolean("viewportGridSnapEnabled", false);
+		viewportVertexSnapEnabled = prefs.getBoolean("viewportVertexSnapEnabled", false);
+			viewportGridSnapStepQ = prefs.getInt("viewportGridSnapStepQ", 4);
+		viewportGridSnapStepQ = Math.max(1, Math.min(80, viewportGridSnapStepQ));
+
+		viewportGroupRotateEnabled = prefs.getBoolean("viewportGroupRotateEnabled", false);
+		viewportRotateIndividualOriginEnabled = prefs.getBoolean("viewportRotateIndividualOriginEnabled", true);
+		viewportRotateGroupPivotEnabled = prefs.getBoolean("viewportRotateGroupPivotEnabled", false);
 		
 		Instance = this;
 		
@@ -260,6 +351,8 @@ public static boolean renderAttachmentPoints;
 			@Override
 			public void windowClosing(WindowEvent e)
 			{
+				// Persist window + panel layout before exit.
+				saveWindowLayoutToPrefs();
 				if (currentProject.needsSaving) {
 					int	returnVal = JOptionPane.showConfirmDialog(null, "You have not saved your changes yet, would you like to save now?", "Warning", JOptionPane.YES_NO_CANCEL_OPTION);
 					
@@ -294,6 +387,8 @@ public static boolean renderAttachmentPoints;
 		ProjectCommand texToggle = factoryCommand.CreateToggleTextureCommand();
 		ProjectCommand texRandom = factoryCommand.CreateRandomizeTextureCommand();
 		ProjectCommand selectAll = new CommandSelectAll();
+		ProjectCommand toggleGizmoMode = new CommandToggleViewportGizmoMode();
+		ProjectCommand frameSelection = new at.vintagestory.modelcreator.input.command.CommandFrameSelection(this);
 		
 		ProjectCommand elementUp = factoryCommand.CreateMoveSelectedElementCommandUp(this);
 		ProjectCommand elementForward = factoryCommand.CreateMoveSelectedElementCommandForward(this);
@@ -311,6 +406,11 @@ public static boolean renderAttachmentPoints;
 		manager.subscribe(new ListenerKeyPressOnce(texRandom, Keyboard.KEY_LCONTROL, Keyboard.KEY_B));
 		// Plain 'A' should select all in Cube (modeling) and Keyframe (animation) modes
 		manager.subscribe(new ListenerKeyPressOnce(selectAll, Keyboard.KEY_A));
+		// Toggle viewport gizmo between Move/Rotate
+		// Cycles Move -> Rotate -> Scale
+		manager.subscribe(new ListenerKeyPressOnce(toggleGizmoMode, Keyboard.KEY_Q));
+		// Frame selected element(s) in the viewport (Unity/Unreal-style)
+		manager.subscribe(new ListenerKeyPressOnce(frameSelection, Keyboard.KEY_F));
 		
 		manager.subscribe(new ListenerKeyPressInterval(elementUp, Keyboard.KEY_PRIOR));
 		manager.subscribe(new ListenerKeyPressInterval(elementForward, Keyboard.KEY_UP));
@@ -327,8 +427,14 @@ public static boolean renderAttachmentPoints;
 		
 		
 		pack();
+
+		// Restore window size/position/state (including maximized) so the UI layout comes back as the user left it.
+		boolean restoredBounds = restoreWindowLayoutFromPrefs();
 		setVisible(true);
-		setLocationRelativeTo(null);
+		// Only center on first launch / no saved bounds.
+		if (!restoredBounds) {
+			setLocationRelativeTo(null);
+		}
 
 		initDisplay();
 		
@@ -370,7 +476,144 @@ public static boolean renderAttachmentPoints;
 		return ModelCreator.backdropAnimationsMode && ModelCreator.currentBackdropProject != null ? ModelCreator.currentBackdropProject : ModelCreator.currentProject;
 	}
 	
-	public static boolean AnimationPlaying() {
+	
+
+/**
+ * When enabled, "Mirror Mode" automatically applies keyframe edits made to an element
+ * to its left/right partner element (based on name matching: same name except L/R).
+ */
+public static Element FindMirrorPartner(Element source, Project project)
+{
+    if (source == null || project == null) return null;
+    String name = source.getName();
+    if (name == null || name.length() == 0) return null;
+
+    // Common full-word patterns
+    if (name.contains("Left")) {
+        Element e = project.findElement(name.replace("Left", "Right"));
+        if (e != null) return e;
+    }
+    if (name.contains("Right")) {
+        Element e = project.findElement(name.replace("Right", "Left"));
+        if (e != null) return e;
+    }
+
+    // Single-character swap candidates (try swapping one occurrence at a time)
+    java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<String>();
+    for (int i = 0; i < name.length(); i++) {
+        char ch = name.charAt(i);
+        if (ch == 'L') candidates.add(name.substring(0, i) + 'R' + name.substring(i + 1));
+        else if (ch == 'R') candidates.add(name.substring(0, i) + 'L' + name.substring(i + 1));
+        else if (ch == 'l') candidates.add(name.substring(0, i) + 'r' + name.substring(i + 1));
+        else if (ch == 'r') candidates.add(name.substring(0, i) + 'l' + name.substring(i + 1));
+    }
+
+    for (String cand : candidates) {
+        if (cand == null || cand.equals(name)) continue;
+        Element e = project.findElement(cand);
+        if (e != null) return e;
+    }
+
+    return null;
+}
+
+public static at.vintagestory.modelcreator.enums.EnumAxis GetMirrorAxis(Project project) {
+    // In entity texture mode, left/right mirroring in the editor corresponds to Z (entities face +/-X).
+    return (project != null && project.EntityTextureMode) ? at.vintagestory.modelcreator.enums.EnumAxis.Z : at.vintagestory.modelcreator.enums.EnumAxis.X;
+}
+
+/**
+ * Apply the current keyframe values of {@code sourceKf} to its L/R partner, reflected across the mirror axis.
+ * If {@code skipIfContains} includes the partner element, nothing happens (prevents fighting with multi-select edits).
+ *
+ * @return the partner keyframe element if one was updated, otherwise null
+ */
+public static AnimFrameElement SyncMirrorKeyframe(AnimFrameElement sourceKf, java.util.Collection<Element> skipIfContains)
+{
+    if (!mirrorMode) return null;
+    if (sourceKf == null || sourceKf.AnimatedElement == null) return null;
+
+    Project project = CurrentAnimProject();
+    if (project == null || project.SelectedAnimation == null) return null;
+
+    Element partner = FindMirrorPartner(sourceKf.AnimatedElement, project);
+    if (partner == null) return null;
+    if (skipIfContains != null && skipIfContains.contains(partner)) return null;
+
+    Animation anim = project.SelectedAnimation;
+    int frame = anim.currentFrame;
+    AnimFrameElement pkf = anim.GetOrCreateKeyFrameElement(partner, frame);
+    if (pkf == null) return null;
+
+    at.vintagestory.modelcreator.enums.EnumAxis axis = GetMirrorAxis(project);
+
+    // Keep channel flags in lockstep
+    pkf.PositionSet = sourceKf.PositionSet;
+    pkf.RotationSet = sourceKf.RotationSet;
+    pkf.StretchSet = sourceKf.StretchSet;
+    pkf.OriginSet = sourceKf.OriginSet;
+    pkf.RotShortestDistanceX = sourceKf.RotShortestDistanceX;
+    pkf.RotShortestDistanceY = sourceKf.RotShortestDistanceY;
+    pkf.RotShortestDistanceZ = sourceKf.RotShortestDistanceZ;
+
+    // Position (mirror across axis)
+    if (sourceKf.PositionSet) {
+        if (axis == at.vintagestory.modelcreator.enums.EnumAxis.X) {
+            pkf.setOffsetX(-sourceKf.getOffsetX());
+            pkf.setOffsetY(sourceKf.getOffsetY());
+            pkf.setOffsetZ(sourceKf.getOffsetZ());
+        } else {
+            pkf.setOffsetX(sourceKf.getOffsetX());
+            pkf.setOffsetY(sourceKf.getOffsetY());
+            pkf.setOffsetZ(-sourceKf.getOffsetZ());
+        }
+    }
+
+    // Rotation (reflection: invert the components that change handedness)
+    if (sourceKf.RotationSet) {
+        if (axis == at.vintagestory.modelcreator.enums.EnumAxis.X) {
+            pkf.setRotationX(sourceKf.getRotationX());
+            pkf.setRotationY(-sourceKf.getRotationY());
+            pkf.setRotationZ(-sourceKf.getRotationZ());
+        } else {
+            pkf.setRotationX(-sourceKf.getRotationX());
+            pkf.setRotationY(-sourceKf.getRotationY());
+            pkf.setRotationZ(sourceKf.getRotationZ());
+        }
+    }
+
+    // Scale (same values on both sides)
+    if (sourceKf.StretchSet) {
+        pkf.setStretchX(sourceKf.getStretchX());
+        pkf.setStretchY(sourceKf.getStretchY());
+        pkf.setStretchZ(sourceKf.getStretchZ());
+    }
+
+    // Keyframeable origin offset (mirror along the axis)
+    if (sourceKf.OriginSet) {
+        if (axis == at.vintagestory.modelcreator.enums.EnumAxis.X) {
+            pkf.setOriginX(-sourceKf.getOriginX());
+            pkf.setOriginY(sourceKf.getOriginY());
+            pkf.setOriginZ(sourceKf.getOriginZ());
+        } else {
+            pkf.setOriginX(sourceKf.getOriginX());
+            pkf.setOriginY(sourceKf.getOriginY());
+            pkf.setOriginZ(-sourceKf.getOriginZ());
+        }
+    }
+
+    // If we turned everything off, allow cleanup like normal.
+    if (!pkf.PositionSet && !pkf.RotationSet && !pkf.StretchSet && !pkf.OriginSet
+            && !pkf.RotShortestDistanceX && !pkf.RotShortestDistanceY && !pkf.RotShortestDistanceZ) {
+        anim.RemoveKeyFramesIfUseless(pkf);
+    }
+
+    // Ensure preview updates immediately while editing.
+    anim.SetFramesDirty();
+
+    return pkf;
+}
+public static boolean AnimationPlaying() {
 		return currentProject != null && currentProject.PlayAnimation; 
 	}
 	
@@ -381,6 +624,55 @@ public static boolean renderAttachmentPoints;
 	        sb.append("\n");
 	    }
 	    return sb.toString();
+	}
+
+	/**
+	 * Persist the current window bounds and extended state.
+	 * This ensures that things like maximized fullscreen and the user's preferred layout
+	 * (along with other per-panel prefs) survive restarts.
+	 */
+	private void saveWindowLayoutToPrefs()
+	{
+		try {
+			// Save bounds
+			java.awt.Rectangle b = getBounds();
+			prefs.putInt("windowX", b.x);
+			prefs.putInt("windowY", b.y);
+			prefs.putInt("windowW", b.width);
+			prefs.putInt("windowH", b.height);
+
+			// Save extended state (maximized, etc)
+			prefs.putInt("windowExtendedState", getExtendedState());
+		} catch (Throwable t) {
+			// Ignore prefs issues.
+		}
+	}
+
+	/**
+	 * Restore window bounds/state from prefs.
+	 * @return true if saved bounds were found and applied
+	 */
+	private boolean restoreWindowLayoutFromPrefs()
+	{
+		try {
+			int w = prefs.getInt("windowW", -1);
+			int h = prefs.getInt("windowH", -1);
+			if (w <= 0 || h <= 0) return false;
+
+			int x = prefs.getInt("windowX", Integer.MIN_VALUE);
+			int y = prefs.getInt("windowY", Integer.MIN_VALUE);
+			if (x == Integer.MIN_VALUE || y == Integer.MIN_VALUE) return false;
+
+			// Apply bounds first.
+			setBounds(x, y, w, h);
+
+			// Then extended state (maximized, etc)
+			int state = prefs.getInt("windowExtendedState", 0);
+			if (state != 0) setExtendedState(state);
+			return true;
+		} catch (Throwable t) {
+			return false;
+		}
 	}
 	
 
@@ -465,10 +757,12 @@ public static boolean renderAttachmentPoints;
 		//== Canvas trickery for larger uiScales ==//
 		// kinda messy, but works
 		final double viewScale = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration().getDefaultTransform().getScaleX();
+		viewportUiScale = viewScale;
 		
 		// Create a container for our canvas (a simple JPanel) without a layout
 		// so that our canvas would not get affected by the base component's layout.
 		JPanel panel = new JPanel(null);
+		canvasContainerPanel = panel;
 		panel.add(canvas);
 		add(panel, BorderLayout.CENTER);
 		
@@ -502,6 +796,9 @@ public static boolean renderAttachmentPoints;
 		
 		uvSidebar = new LeftUVSidebar("UV Editor", rightTopPanel);
 		viewportSidebar = new at.vintagestory.modelcreator.gui.left.LeftViewportSidebar();
+		// Let the viewport sidebar receive keyboard events for inline numeric entry.
+		try { manager.subscribe(viewportSidebar); } catch (Throwable t) { }
+
 
 		// If no sidebar has been selected yet (startup), default to the viewport sidebar.
 		if (modelrenderer.renderedLeftSidebar == null) {
@@ -520,6 +817,84 @@ public static boolean renderAttachmentPoints;
 		icons.add(Toolkit.getDefaultToolkit().getImage("assets/appicon_64x.png"));
 		icons.add(Toolkit.getDefaultToolkit().getImage("assets/appicon_128x.png"));
 		return icons;
+	}
+
+	/**
+	 * Shows an inline Swing text field over the OpenGL viewport for numeric entry.
+	 * Coordinates are in canvas pixel space (same coordinate space as the left viewport sidebar rendering).
+	 */
+	public static void showViewportInlineNumberEditor(final int canvasPxX, final int canvasPxY, final int canvasPxW, final int canvasPxH,
+			final String initialValue, final java.util.function.Consumer<String> onCommit)
+	{
+		SwingUtilities.invokeLater(new Runnable() {
+			@Override
+			public void run() {
+				if (canvasContainerPanel == null) return;
+				viewportInlineNumberCommit = onCommit;
+
+				if (viewportInlineNumberField == null) {
+					viewportInlineNumberField = new JTextField();
+					viewportInlineNumberField.setVisible(false);
+					viewportInlineNumberField.setBorder(BorderFactory.createLineBorder(new Color(190, 190, 210), 1));
+					viewportInlineNumberField.setBackground(new Color(55, 55, 62));
+					viewportInlineNumberField.setForeground(new Color(235, 235, 245));
+					viewportInlineNumberField.setCaretColor(new Color(235, 235, 245));
+					viewportInlineNumberField.setFont(new Font("Dialog", Font.PLAIN, 12));
+					viewportInlineNumberField.addActionListener(new ActionListener() {
+						@Override
+						public void actionPerformed(ActionEvent e) {
+							commitViewportInlineNumber(false);
+						}
+					});
+					viewportInlineNumberField.addFocusListener(new FocusAdapter() {
+						@Override
+						public void focusLost(FocusEvent e) {
+							commitViewportInlineNumber(false);
+						}
+					});
+					viewportInlineNumberField.addKeyListener(new KeyAdapter() {
+						@Override
+						public void keyPressed(KeyEvent e) {
+							if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+								commitViewportInlineNumber(true);
+								e.consume();
+							}
+						}
+					});
+					canvasContainerPanel.add(viewportInlineNumberField);
+				}
+
+				// Convert canvas pixel coords to panel coords (HiDPI).
+				double s = viewportUiScale;
+				int x = (int)Math.round(canvasPxX / s);
+				int y = (int)Math.round(canvasPxY / s);
+				int w = Math.max(20, (int)Math.round(canvasPxW / s));
+				int h = Math.max(18, (int)Math.round(canvasPxH / s));
+
+				viewportInlineNumberField.setText(initialValue);
+				viewportInlineNumberField.setBounds(x, y, w, h);
+				viewportInlineNumberField.setVisible(true);
+				viewportInlineNumberField.selectAll();
+				viewportInlineNumberField.requestFocusInWindow();
+			}
+		});
+	}
+
+	private static void commitViewportInlineNumber(boolean cancel)
+	{
+		if (viewportInlineNumberField == null) return;
+		if (!viewportInlineNumberField.isVisible()) return;
+		String txt = viewportInlineNumberField.getText();
+		viewportInlineNumberField.setVisible(false);
+		// Return focus back to the GL canvas.
+		try { if (canvas != null) canvas.requestFocus(); } catch (Exception ignored) {}
+
+		if (cancel) return;
+		java.util.function.Consumer<String> cb = viewportInlineNumberCommit;
+		viewportInlineNumberCommit = null;
+		if (cb != null) {
+			try { cb.accept(txt); } catch (Exception ignored) {}
+		}
 	}
 
 	
@@ -785,6 +1160,184 @@ public static boolean renderAttachmentPoints;
 		return leftSpacing;
 	}
 
+	/**
+	 * Unity/Unreal-style "Frame Selection" in the 3D viewport.
+	 * Moves the camera so the current selection sits nicely on screen without changing camera rotation.
+	 */
+	public void frameSelectionInViewport()
+	{
+		try {
+			if (currentProject == null || modelrenderer == null || modelrenderer.camera == null) return;
+			Project project = currentProject;
+			if (project.SelectedElement == null && (project.SelectedElements == null || project.SelectedElements.size() == 0)) return;
+
+			// Use multi-selection bounds when available.
+			java.util.List<Element> elems;
+			if (project.SelectedElements != null && project.SelectedElements.size() > 0) {
+				elems = project.SelectedElements;
+			} else {
+				elems = java.util.Collections.singletonList(project.SelectedElement);
+			}
+
+			// If in keyframe mode, include animation offsets (same logic as viewport gizmo pivot).
+			boolean keyframeTab = (currentRightTab == 2 && project.SelectedAnimation != null && leftKeyframesPanel != null && leftKeyframesPanel.isVisible());
+			AnimationFrame curFrame = null;
+			if (keyframeTab) {
+				int cf = project.SelectedAnimation.currentFrame;
+				if (project.SelectedAnimation.allFrames != null && cf >= 0 && cf < project.SelectedAnimation.allFrames.size()) {
+					curFrame = project.SelectedAnimation.allFrames.get(cf);
+				}
+			}
+
+			double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+			double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+			for (Element e : elems) {
+				if (e == null) continue;
+				double[] b = computeElementRootBoundsForFraming(e, curFrame);
+				if (b == null) continue;
+				minX = Math.min(minX, b[0]);
+				minY = Math.min(minY, b[1]);
+				minZ = Math.min(minZ, b[2]);
+				maxX = Math.max(maxX, b[3]);
+				maxY = Math.max(maxY, b[4]);
+				maxZ = Math.max(maxZ, b[5]);
+			}
+			if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return;
+
+			double cx = (minX + maxX) * 0.5;
+			double cy = (minY + maxY) * 0.5;
+			double cz = (minZ + maxZ) * 0.5;
+
+				// Important: the renderer shifts the whole model by (-8, 0, -8) before drawing
+				// (Minecraft-style 0..16 space centered around X/Z = 8). The bounds above are in
+				// project/root space, so apply the same shift so the camera frames the *rendered* position.
+				cx -= 8.0;
+				cz -= 8.0;
+
+			double dx = (maxX - minX);
+			double dy = (maxY - minY);
+			double dz = (maxZ - minZ);
+			double radius = 0.5 * Math.sqrt(dx * dx + dy * dy + dz * dz);
+			if (!Double.isFinite(radius) || radius < 0.001) radius = 0.5;
+
+			int ls = leftSidebarWidth();
+			int vw = Math.max(1, canvWidth - ls);
+			int vh = Math.max(1, canvHeight);
+			double aspect = (double) vw / (double) vh;
+
+			// FOV is fixed at 60 in the renderer.
+			double fovy = Math.toRadians(60.0);
+			double tanHalfVert = Math.tan(fovy * 0.5);
+			double halfHoriz = Math.atan(tanHalfVert * aspect);
+			double tanHalfHoriz = Math.tan(halfHoriz);
+			double tanMin = Math.min(tanHalfVert, tanHalfHoriz);
+			if (tanMin < 1e-6) tanMin = tanHalfVert;
+
+			// Distance required to fit the selection (sphere) into view.
+			double dist = radius / tanMin;
+			// A little breathing room so it isn't kissing the edges.
+			dist = dist * 1.15 + 0.5;
+			// Respect near plane.
+			double near = 0.3;
+			dist = Math.max(dist, near + radius + 0.5);
+
+			double zoff = -dist;
+
+			// Compute camera translation so that R*center + t = (0,0,zoff)
+			double rx = Math.toRadians(modelrenderer.camera.getRX());
+			double ry = Math.toRadians(modelrenderer.camera.getRY());
+
+			// Apply rotation order: Ry then Rx (matches GL calls: Rx then Ry, applied to vertices in reverse).
+			double cosY = Math.cos(ry), sinY = Math.sin(ry);
+			double x1 = cx * cosY + cz * sinY;
+			double y1 = cy;
+			double z1 = -cx * sinY + cz * cosY;
+
+			double cosX = Math.cos(rx), sinX = Math.sin(rx);
+			double x2 = x1;
+			double y2 = y1 * cosX - z1 * sinX;
+			double z2 = y1 * sinX + z1 * cosX;
+
+			float tx = (float) (-x2);
+			float ty = (float) (-y2);
+			float tz = (float) (-z2 + zoff);
+
+			modelrenderer.camera.setX(tx);
+			modelrenderer.camera.setY(ty);
+			modelrenderer.camera.setZ(tz);
+		} catch (Throwable t) {
+			// Never crash the main loop over a convenience feature.
+		}
+	}
+
+	/**
+	 * Computes an element's axis-aligned bounds in ROOT space by applying the full parent->child
+	 * transform chain. When a keyframe frame is provided, animation offsets are applied.
+	 */
+	private double[] computeElementRootBoundsForFraming(Element elem, AnimationFrame curFrame)
+	{
+		if (elem == null) return null;
+		float[] mat = Mat4f.Identity_(new float[16]);
+		java.util.List<Element> path = elem.GetParentPath();
+		if (path != null) {
+			for (Element p : path) {
+				applyTransformWithAnimOffsetForFraming(mat, p, curFrame);
+			}
+		}
+		applyTransformWithAnimOffsetForFraming(mat, elem, curFrame);
+
+		double w = elem.getWidth();
+		double h = elem.getHeight();
+		double d = elem.getDepth();
+
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+
+		double[][] corners = new double[][] {
+			{0, 0, 0}, {w, 0, 0}, {0, h, 0}, {0, 0, d},
+			{w, h, 0}, {w, 0, d}, {0, h, d}, {w, h, d}
+		};
+
+		for (double[] c : corners) {
+			float[] out = Mat4f.MulWithVec4(mat, new float[] { (float)c[0], (float)c[1], (float)c[2], 1f });
+			double x = out[0];
+			double y = out[1];
+			double z = out[2];
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			minZ = Math.min(minZ, z);
+			maxX = Math.max(maxX, x);
+			maxY = Math.max(maxY, y);
+			maxZ = Math.max(maxZ, z);
+		}
+
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return null;
+		return new double[] { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	private void applyTransformWithAnimOffsetForFraming(float[] mat, Element elem, AnimationFrame curFrame)
+	{
+		if (elem == null) return;
+		double offX = 0, offY = 0, offZ = 0;
+		if (curFrame != null) {
+			AnimFrameElement afe = curFrame.GetAnimFrameElementRec(elem);
+			if (afe == null) afe = curFrame.GetAnimFrameElementRecByName(elem.getName());
+			if (afe != null) {
+				offX = afe.getOffsetX();
+				offY = afe.getOffsetY();
+				offZ = afe.getOffsetZ();
+			}
+		}
+
+		Mat4f.Translate(mat, mat, new float[] { (float)elem.getOriginX(), (float)elem.getOriginY(), (float)elem.getOriginZ() });
+		Mat4f.RotateX(mat, mat, (float)elem.getRotationX() * GameMath.DEG2RAD);
+		Mat4f.RotateY(mat, mat, (float)elem.getRotationY() * GameMath.DEG2RAD);
+		Mat4f.RotateZ(mat, mat, (float)elem.getRotationZ() * GameMath.DEG2RAD);
+		Mat4f.Translate(mat, mat, new float[] { (float)-elem.getOriginX(), (float)-elem.getOriginY(), (float)-elem.getOriginZ() });
+
+		Mat4f.Translate(mat, mat, new float[] { (float)(elem.getStartX() + offX), (float)(elem.getStartY() + offY), (float)(elem.getStartZ() + offZ) });
+	}
+
 	
 	
 	public void handleInputKeyboard()
@@ -822,11 +1375,50 @@ public static boolean renderAttachmentPoints;
 	 * instead of only the active element.
 	 */
 	public static boolean viewportGroupMoveEnabled = false;
+
+/** When enabled, viewport rotate operations will apply to all currently selected elements instead of only the active element. */
+public static boolean viewportGroupRotateEnabled = false;
+/** When enabled, multi-rotate uses each element's own origin/pivot (creature-friendly). */
+public static boolean viewportRotateIndividualOriginEnabled = true;
+/** When enabled, multi-rotate orbits the whole selection around the shared gizmo pivot (also rotates elements). */
+public static boolean viewportRotateGroupPivotEnabled = false;
 	/**
 	 * When enabled, viewport translate operations will not allow moving any selected element
 	 * below its Y value at the start of the current drag.
 	 */
 	public static boolean viewportFloorSnapEnabled = false;
+
+
+	/** When enabled, movement will snap to fixed increments (grid). */
+	public static boolean viewportGridSnapEnabled = false;
+	/** When enabled, movement will snap selection vertices to other element vertices while moving. */
+	public static boolean viewportVertexSnapEnabled = false;
+	/** Grid snap step as quarter-units (step = value/4). Range: 1..80 => 0.25..20. */
+	public static int viewportGridSnapStepQ = 4;
+
+	/**
+	 * The 3D viewport renders selection using { Project#SelectedElements}. In some workflows the
+	 * Swing JTree selection can temporarily get out of sync with that list (for example when the user
+	 * performs viewport-driven selection while focus isn't on the hierarchy). For transforms we treat
+	 * { SelectedElements} as authoritative whenever it contains elements not present in the tree selection.
+	 */
+	public static boolean isViewportSelectionOutOfSync(Project project)
+	{
+		if (project == null || project.SelectedElements == null || project.SelectedElements.size() <= 1) return false;
+		if (project.tree == null) return true;
+		try {
+			java.util.List<Element> treeSel = project.tree.getSelectedElements();
+			if (treeSel == null || treeSel.size() == 0) return true;
+			java.util.HashSet<Element> treeSet = new java.util.HashSet<Element>(treeSel);
+			for (Element e : project.SelectedElements) {
+				if (e != null && !treeSet.contains(e)) return true;
+			}
+			return false;
+		} catch (Throwable t) {
+			return true;
+		}
+	}
+
 
 	// Viewport gizmo drag state
 	private boolean viewportGizmoDragActive;
@@ -838,6 +1430,13 @@ public static boolean renderAttachmentPoints;
 	private double viewportGizmoAxisOriginX, viewportGizmoAxisOriginY, viewportGizmoAxisOriginZ;
 	private double viewportGizmoAxisWorldDirX, viewportGizmoAxisWorldDirY, viewportGizmoAxisWorldDirZ;
 	private double viewportGizmoAxisParamStart;
+
+	// Drag-start gizmo pivot in WORLD space (used for snapping).
+	private double viewportGizmoDragPivotWorldX, viewportGizmoDragPivotWorldY, viewportGizmoDragPivotWorldZ;
+
+	// Vertex snap cached targets (world-space corners of non-selected elements) and base bounds of the moved group.
+	private java.util.ArrayList<double[]> viewportVertexSnapTargets;
+	private double[][] viewportVertexSnapBaseCorners;
 	/**
 	 * Cached mapping from world-axis delta (X/Y/Z) to the element's local StartX/StartY/StartZ delta.
 	 * This prevents axis-drag drift when elements (or their parents) are rotated.
@@ -856,6 +1455,91 @@ public static boolean renderAttachmentPoints;
 	private boolean viewportGizmoDragInKeyframeMode;
 	private int viewportGizmoDragAnimVersion;
 	private java.util.HashMap<Element, AnimFrameElement> viewportGizmoKeyframeElems;
+
+// Mirror Mode (modeling tab) drag support: cached partner elements and their drag-start bases
+private java.util.HashMap<Element, Element> viewportGizmoMirrorPartners;
+private java.util.HashMap<Element, Double> viewportGizmoMirrorBaseX;
+private java.util.HashMap<Element, Double> viewportGizmoMirrorBaseY;
+private java.util.HashMap<Element, Double> viewportGizmoMirrorBaseZ;
+
+
+// Viewport rotate gizmo drag state (gimbal rings)
+private boolean viewportRotateDragActive;
+private int viewportRotateDragAxis; // 0 none, 1 X, 2 Y, 3 Z
+private boolean viewportRotateSkipSelection;
+private double viewportRotatePivotX, viewportRotatePivotY, viewportRotatePivotZ;
+private double viewportRotateStartVx, viewportRotateStartVy, viewportRotateStartVz;
+private java.util.List<Element> viewportRotateElems;
+private java.util.HashMap<Element, Double> viewportRotateBaseRotX;
+private java.util.HashMap<Element, Double> viewportRotateBaseRotY;
+private java.util.HashMap<Element, Double> viewportRotateBaseRotZ;
+private java.util.HashMap<Element, Double> viewportRotateBaseStartX;
+private java.util.HashMap<Element, Double> viewportRotateBaseStartY;
+private java.util.HashMap<Element, Double> viewportRotateBaseStartZ;
+private java.util.HashMap<Element, double[]> viewportRotateWorldAxisToLocal;
+// Keyframe (animation tab) rotate drag support
+private boolean viewportRotateDragInKeyframeMode;
+private int viewportRotateDragAnimVersion;
+private java.util.HashMap<Element, AnimFrameElement> viewportRotateKeyframeElems;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfRotX;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfRotY;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfRotZ;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfPosX;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfPosY;
+private java.util.HashMap<Element, Double> viewportRotateBaseKfPosZ;
+private java.util.HashMap<Element, double[]> viewportRotateBaseCenterWorld;
+
+
+// Viewport scale gizmo drag state (Scale handles)
+private boolean viewportScaleDragActive;
+private int viewportScaleDragMode; // 0 none, 1 X, 2 Y, 3 Z, 4 UNIFORM
+private boolean viewportScaleSkipSelection;
+private double viewportScaleAxisDirX;
+private double viewportScaleAxisDirY;
+// For world-axis mode, use the same ray-to-axis constraint as Move to make scaling stable regardless of zoom.
+private boolean viewportScaleUseRayConstraint;
+private double viewportScaleAxisOriginX, viewportScaleAxisOriginY, viewportScaleAxisOriginZ;
+private double viewportScaleAxisWorldDirX, viewportScaleAxisWorldDirY, viewportScaleAxisWorldDirZ;
+private double viewportScaleAxisParamStart;
+private java.util.List<Element> viewportScaleElems;
+// Modeling tab (resize) bases
+private java.util.HashMap<Element, Double> viewportScaleBaseStartX;
+private java.util.HashMap<Element, Double> viewportScaleBaseStartY;
+private java.util.HashMap<Element, Double> viewportScaleBaseStartZ;
+private java.util.HashMap<Element, Double> viewportScaleBaseW;
+private java.util.HashMap<Element, Double> viewportScaleBaseH;
+private java.util.HashMap<Element, Double> viewportScaleBaseD;
+// Keyframe (animation tab) stretch bases
+private boolean viewportScaleDragInKeyframeMode;
+private int viewportScaleDragAnimVersion;
+private java.util.HashMap<Element, AnimFrameElement> viewportScaleKeyframeElems;
+private java.util.HashMap<Element, Double> viewportScaleBaseKfSX;
+private java.util.HashMap<Element, Double> viewportScaleBaseKfSY;
+private java.util.HashMap<Element, Double> viewportScaleBaseKfSZ;
+// We may need to adjust offsets while scaling in animation mode (e.g. floor guard),
+// so cache the drag-start offsets as well.
+private java.util.HashMap<Element, Double> viewportScaleBaseKfPosX;
+private java.util.HashMap<Element, Double> viewportScaleBaseKfPosY;
+private java.util.HashMap<Element, Double> viewportScaleBaseKfPosZ;
+
+// Mirror Mode (modeling) scale drag support
+private java.util.HashMap<Element, Element> viewportScaleMirrorPartners;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseStartX;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseStartY;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseStartZ;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseW;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseH;
+private java.util.HashMap<Element, Double> viewportScaleMirrorBaseD;
+
+
+// Mirror Mode (modeling tab) rotate drag support
+private java.util.HashMap<Element, Element> viewportRotateMirrorPartners;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseRotX;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseRotY;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseRotZ;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseStartX;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseStartY;
+private java.util.HashMap<Element, Double> viewportRotateMirrorBaseStartZ;
 
 		private java.util.List<Element> getSelectedRootElementsForMove(Element lead, boolean moveAll)
 		{
@@ -881,7 +1565,232 @@ public static boolean renderAttachmentPoints;
 			return roots;
 		}
 
-		private void tryStartViewportGizmoDrag()
+		private void tryStartViewportRotateGizmoDrag()
+{
+	if (viewportRotateDragActive || currentProject == null) return;
+	Element selected = currentProject.SelectedElement;
+	if (selected == null) return;
+
+	int axis = modelrenderer.hitTestViewportRotateGizmo(mouseDownX, mouseDownY);
+	if (axis == 0) return;
+
+	viewportRotateDragAxis = axis;
+	viewportRotateDragActive = true;
+	viewportRotateSkipSelection = true;
+	grabbedElem = selected;
+
+	viewportRotatePivotX = modelrenderer.viewportMoveGizmoWorldX;
+	viewportRotatePivotY = modelrenderer.viewportMoveGizmoWorldY;
+	viewportRotatePivotZ = modelrenderer.viewportMoveGizmoWorldZ;
+
+	boolean effectiveGroupRotate = viewportGroupRotateEnabled || isViewportSelectionOutOfSync(currentProject);
+
+	// When rotating multiple selected elements by *individual origins*, rotate *all* selected elements
+	// (including children). This allows parent+child rotations to accumulate (e.g. tail chains).
+	// For group-pivot/orbit behavior we keep roots-only selection to avoid double-applying transforms.
+	if (effectiveGroupRotate
+			&& viewportRotateIndividualOriginEnabled
+			&& currentProject.SelectedElements != null
+			&& currentProject.SelectedElements.size() > 1)
+	{
+		viewportRotateElems = new java.util.ArrayList<Element>(currentProject.SelectedElements);
+	}
+	else
+	{
+		viewportRotateElems = getSelectedRootElementsForMove(selected, effectiveGroupRotate);
+	}
+
+	// Keyframe tab: rotate should animate when in Animation tab, not edit the base model.
+	viewportRotateDragInKeyframeMode = (ModelCreator.currentRightTab == 2 && currentProject != null && currentProject.SelectedAnimation != null);
+	viewportRotateDragAnimVersion = viewportRotateDragInKeyframeMode ? currentProject.CurrentAnimVersion() : 0;
+	viewportRotateKeyframeElems = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, AnimFrameElement>() : null;
+
+	if (viewportRotateDragInKeyframeMode && currentProject.tree != null && viewportRotateElems != null && viewportRotateElems.size() > 0) {
+		try {
+			java.util.HashSet<Element> rootSet = new java.util.HashSet<Element>(viewportRotateElems);
+			Element driver = selected;
+			Element p = selected;
+			while (p != null && !rootSet.contains(p)) {
+				p = p.ParentElement;
+			}
+			if (p != null) driver = p;
+			currentProject.tree.setLeadSelectionElement(driver, true);
+		} catch (Throwable t) {
+			// ignore selection/UI issues
+		}
+	}
+
+	AnimationFrame curAnimFrame = null;
+	if (viewportRotateDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+		int cf = currentProject.SelectedAnimation.currentFrame;
+		if (currentProject.SelectedAnimation.allFrames != null && cf >= 0 && cf < currentProject.SelectedAnimation.allFrames.size()) {
+			curAnimFrame = currentProject.SelectedAnimation.allFrames.get(cf);
+		}
+	}
+
+	viewportRotateBaseRotX = new java.util.HashMap<Element, Double>();
+	viewportRotateBaseRotY = new java.util.HashMap<Element, Double>();
+	viewportRotateBaseRotZ = new java.util.HashMap<Element, Double>();
+	viewportRotateBaseStartX = new java.util.HashMap<Element, Double>();
+	viewportRotateBaseStartY = new java.util.HashMap<Element, Double>();
+	viewportRotateBaseStartZ = new java.util.HashMap<Element, Double>();
+	viewportRotateWorldAxisToLocal = new java.util.HashMap<Element, double[]>();
+	viewportRotateBaseCenterWorld = new java.util.HashMap<Element, double[]>();
+
+	viewportRotateBaseKfRotX = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+	viewportRotateBaseKfRotY = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+	viewportRotateBaseKfRotZ = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+	viewportRotateBaseKfPosX = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+	viewportRotateBaseKfPosY = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+	viewportRotateBaseKfPosZ = viewportRotateDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+
+	for (Element e : viewportRotateElems) {
+		if (e == null) continue;
+
+		viewportRotateBaseRotX.put(e, e.getRotationX());
+		viewportRotateBaseRotY.put(e, e.getRotationY());
+		viewportRotateBaseRotZ.put(e, e.getRotationZ());
+		viewportRotateBaseStartX.put(e, e.getStartX());
+		viewportRotateBaseStartY.put(e, e.getStartY());
+		viewportRotateBaseStartZ.put(e, e.getStartZ());
+
+		double kfOffX = 0, kfOffY = 0, kfOffZ = 0;
+		if (viewportRotateDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+			AnimFrameElement prevKfRot = currentProject.SelectedAnimation.GetKeyFrameElement(e, currentProject.SelectedAnimation.currentFrame);
+			boolean prevRotSet = prevKfRot != null && prevKfRot.RotationSet;
+
+			AnimFrameElement kfRot = currentProject.SelectedAnimation.ToggleRotation(e, true);
+			// If we just enabled rotation on this element, seed the keyframe with the current (lerped) frame values
+			// so the pose doesn't snap back to the base model on first edit.
+			if (!prevRotSet && curAnimFrame != null && kfRot != null) {
+				AnimFrameElement frameElem = curAnimFrame.GetAnimFrameElementRec(e);
+				if (frameElem != null) {
+					kfRot.setRotationX(frameElem.getRotationX());
+					kfRot.setRotationY(frameElem.getRotationY());
+					kfRot.setRotationZ(frameElem.getRotationZ());
+				}
+			}
+			if (kfRot != null) {
+				viewportRotateKeyframeElems.put(e, kfRot);
+				viewportRotateBaseKfRotX.put(e, kfRot.getRotationX());
+				viewportRotateBaseKfRotY.put(e, kfRot.getRotationY());
+				viewportRotateBaseKfRotZ.put(e, kfRot.getRotationZ());
+			} else {
+				viewportRotateBaseKfRotX.put(e, 0d);
+				viewportRotateBaseKfRotY.put(e, 0d);
+				viewportRotateBaseKfRotZ.put(e, 0d);
+			}
+
+			if (viewportRotateGroupPivotEnabled) {
+				AnimFrameElement kfPos = currentProject.SelectedAnimation.TogglePosition(e, true);
+				if (kfPos != null) {
+					viewportRotateBaseKfPosX.put(e, kfPos.getOffsetX());
+					viewportRotateBaseKfPosY.put(e, kfPos.getOffsetY());
+					viewportRotateBaseKfPosZ.put(e, kfPos.getOffsetZ());
+					kfOffX = kfPos.getOffsetX();
+					kfOffY = kfPos.getOffsetY();
+					kfOffZ = kfPos.getOffsetZ();
+				} else {
+					viewportRotateBaseKfPosX.put(e, 0d);
+					viewportRotateBaseKfPosY.put(e, 0d);
+					viewportRotateBaseKfPosZ.put(e, 0d);
+				}
+			}
+
+			viewportRotateWorldAxisToLocal.put(e, computeWorldAxisToLocalMapAnimated(e, curAnimFrame, viewportRotateDragAnimVersion));
+		} else {
+			viewportRotateWorldAxisToLocal.put(e, computeWorldAxisToLocalMap(e));
+		}
+
+		// Reference point for group-pivot orbit: center of the cuboid box in world/model coords
+		double cx = e.getStartX() + kfOffX + e.getWidth() / 2.0;
+		double cy = e.getStartY() + kfOffY + e.getHeight() / 2.0;
+		double cz = e.getStartZ() + kfOffZ + e.getDepth() / 2.0;
+		viewportRotateBaseCenterWorld.put(e, new double[] { cx, cy, cz });
+	}
+
+
+	// Mirror Mode (modeling): cache partner drag-start bases so we can mirror rotation/translation
+	viewportRotateMirrorPartners = null;
+	viewportRotateMirrorBaseRotX = null;
+	viewportRotateMirrorBaseRotY = null;
+	viewportRotateMirrorBaseRotZ = null;
+	viewportRotateMirrorBaseStartX = null;
+	viewportRotateMirrorBaseStartY = null;
+	viewportRotateMirrorBaseStartZ = null;
+	if (!viewportRotateDragInKeyframeMode && ModelCreator.mirrorMode && viewportRotateElems != null && viewportRotateElems.size() > 0) {
+		java.util.HashSet<Element> selSet = new java.util.HashSet<Element>(viewportRotateElems);
+		viewportRotateMirrorPartners = new java.util.HashMap<Element, Element>();
+		viewportRotateMirrorBaseRotX = new java.util.HashMap<Element, Double>();
+		viewportRotateMirrorBaseRotY = new java.util.HashMap<Element, Double>();
+		viewportRotateMirrorBaseRotZ = new java.util.HashMap<Element, Double>();
+		viewportRotateMirrorBaseStartX = new java.util.HashMap<Element, Double>();
+		viewportRotateMirrorBaseStartY = new java.util.HashMap<Element, Double>();
+		viewportRotateMirrorBaseStartZ = new java.util.HashMap<Element, Double>();
+		for (Element e : viewportRotateElems) {
+			Element partner = FindMirrorPartner(e, currentProject);
+			if (partner != null && !selSet.contains(partner)) {
+				viewportRotateMirrorPartners.put(e, partner);
+				viewportRotateMirrorBaseRotX.put(partner, partner.getRotationX());
+				viewportRotateMirrorBaseRotY.put(partner, partner.getRotationY());
+				viewportRotateMirrorBaseRotZ.put(partner, partner.getRotationZ());
+				viewportRotateMirrorBaseStartX.put(partner, partner.getStartX());
+				viewportRotateMirrorBaseStartY.put(partner, partner.getStartY());
+				viewportRotateMirrorBaseStartZ.put(partner, partner.getStartZ());
+			}
+		}
+	}
+
+	// Compute the starting direction vector on the rotation plane from mouse ray intersection
+	double[] ray = modelrenderer.getMouseRayWorld(mouseDownX, mouseDownY);
+	if (ray == null) {
+		viewportRotateDragActive = false;
+		viewportRotateSkipSelection = false;
+		return;
+	}
+	double r0x = ray[0], r0y = ray[1], r0z = ray[2];
+	double rdx = ray[3], rdy = ray[4], rdz = ray[5];
+
+	double nx = 0, ny = 0, nz = 0;
+	if (axis == 1) nx = 1;
+	if (axis == 2) ny = 1;
+	if (axis == 3) nz = 1;
+
+	double denom = nx*rdx + ny*rdy + nz*rdz;
+	if (Math.abs(denom) < 1e-9) {
+		viewportRotateDragActive = false;
+		viewportRotateSkipSelection = false;
+		return;
+	}
+
+	double t = (nx*(viewportRotatePivotX - r0x) + ny*(viewportRotatePivotY - r0y) + nz*(viewportRotatePivotZ - r0z)) / denom;
+	double ix = r0x + rdx * t;
+	double iy = r0y + rdy * t;
+	double iz = r0z + rdz * t;
+
+	double vx = ix - viewportRotatePivotX;
+	double vy = iy - viewportRotatePivotY;
+	double vz = iz - viewportRotatePivotZ;
+
+	// Normalize (and ensure on plane)
+	double dot = vx*nx + vy*ny + vz*nz;
+	vx -= dot * nx;
+	vy -= dot * ny;
+	vz -= dot * nz;
+
+	double vlen = Math.sqrt(vx*vx + vy*vy + vz*vz);
+	if (!Double.isFinite(vlen) || vlen < 1e-9) {
+		viewportRotateStartVx = 0;
+		viewportRotateStartVy = 0;
+		viewportRotateStartVz = 0;
+	} else {
+		viewportRotateStartVx = vx / vlen;
+		viewportRotateStartVy = vy / vlen;
+		viewportRotateStartVz = vz / vlen;
+	}
+}
+
+private void tryStartViewportGizmoDrag()
 		{
 			if (viewportGizmoDragActive || currentProject == null) return;
 			Element selected = currentProject.SelectedElement;
@@ -910,12 +1819,33 @@ public static boolean renderAttachmentPoints;
 			viewportGizmoAxisDirX = dir != null ? dir[0] : 0;
 			viewportGizmoAxisDirY = dir != null ? dir[1] : 0;
 
-			viewportGizmoElems = getSelectedRootElementsForMove(selected, viewportGroupMoveEnabled);
+			// Cache the drag-start gizmo pivot (world space) for snapping.
+			viewportGizmoDragPivotWorldX = modelrenderer.viewportMoveGizmoWorldX;
+			viewportGizmoDragPivotWorldY = modelrenderer.viewportMoveGizmoWorldY;
+			viewportGizmoDragPivotWorldZ = modelrenderer.viewportMoveGizmoWorldZ;
+
+
+			boolean effectiveGroupMove = viewportGroupMoveEnabled || isViewportSelectionOutOfSync(currentProject);
+			viewportGizmoElems = getSelectedRootElementsForMove(selected, effectiveGroupMove);
 
 			// In Keyframe tab, viewport translate should animate (write keyframe position offsets), not edit the base model.
 			viewportGizmoDragInKeyframeMode = (ModelCreator.currentRightTab == 2 && currentProject != null && currentProject.SelectedAnimation != null);
 			viewportGizmoDragAnimVersion = viewportGizmoDragInKeyframeMode ? currentProject.CurrentAnimVersion() : 0;
 			viewportGizmoKeyframeElems = viewportGizmoDragInKeyframeMode ? new java.util.HashMap<Element, AnimFrameElement>() : null;
+				if (viewportGizmoDragInKeyframeMode && currentProject.tree != null && viewportGizmoElems != null && viewportGizmoElems.size() > 0) {
+					try {
+						java.util.HashSet<Element> rootSet = new java.util.HashSet<Element>(viewportGizmoElems);
+						Element driver = selected;
+						Element p = selected;
+						while (p != null && !rootSet.contains(p)) {
+							p = p.ParentElement;
+						}
+						if (p != null) driver = p;
+						currentProject.tree.setLeadSelectionElement(driver, true);
+					} catch (Throwable t) {
+						// ignore selection/UI issues; movement should still work
+					}
+				}
 
 			AnimationFrame curAnimFrame = null;
 			if (viewportGizmoDragInKeyframeMode && currentProject.SelectedAnimation != null) {
@@ -957,6 +1887,42 @@ public static boolean renderAttachmentPoints;
 					viewportGizmoWorldAxisToLocal.put(e, computeWorldAxisToLocalMap(e));
 				}
 			}
+
+			// Mirror Mode (modeling): cache partner drag-start bases so we can mirror movement
+			viewportGizmoMirrorPartners = null;
+			viewportGizmoMirrorBaseX = null;
+			viewportGizmoMirrorBaseY = null;
+			viewportGizmoMirrorBaseZ = null;
+			if (!viewportGizmoDragInKeyframeMode && ModelCreator.mirrorMode && viewportGizmoElems != null && viewportGizmoElems.size() > 0) {
+				java.util.HashSet<Element> selSet = new java.util.HashSet<Element>(viewportGizmoElems);
+				viewportGizmoMirrorPartners = new java.util.HashMap<Element, Element>();
+				viewportGizmoMirrorBaseX = new java.util.HashMap<Element, Double>();
+				viewportGizmoMirrorBaseY = new java.util.HashMap<Element, Double>();
+				viewportGizmoMirrorBaseZ = new java.util.HashMap<Element, Double>();
+				for (Element e : viewportGizmoElems) {
+					Element partner = FindMirrorPartner(e, currentProject);
+					if (partner != null && !selSet.contains(partner)) {
+						viewportGizmoMirrorPartners.put(e, partner);
+						viewportGizmoMirrorBaseX.put(partner, partner.getStartX());
+						viewportGizmoMirrorBaseY.put(partner, partner.getStartY());
+						viewportGizmoMirrorBaseZ.put(partner, partner.getStartZ());
+					}
+				}
+			}
+
+			// Precompute vertex snap targets (world-space corners) and base corners of the moved group.
+			viewportVertexSnapTargets = null;
+			viewportVertexSnapBaseCorners = null;
+			if (ModelCreator.viewportVertexSnapEnabled && currentProject != null) {
+				try {
+					viewportVertexSnapBaseCorners = computeMovedGroupBaseCorners(viewportGizmoElems, curAnimFrame, viewportGizmoDragInKeyframeMode, viewportGizmoKeyframeElems);
+					viewportVertexSnapTargets = computeVertexSnapTargets(currentProject, viewportGizmoElems, curAnimFrame, viewportGizmoDragInKeyframeMode, viewportGizmoKeyframeElems);
+				} catch (Throwable t) {
+					viewportVertexSnapTargets = null;
+					viewportVertexSnapBaseCorners = null;
+				}
+			}
+
 			// In world-axis mode, use a precise ray-to-axis constraint so dragging stays locked to the axis.
 			if (!viewportFreedomModeEnabled && (mode == 1 || mode == 2 || mode == 3)) {
 				viewportGizmoAxisOriginX = modelrenderer.viewportMoveGizmoWorldX;
@@ -986,6 +1952,164 @@ public static boolean renderAttachmentPoints;
 			viewportGizmoFreeUpZ = 0;
 		}
 
+		private void tryStartViewportScaleGizmoDrag()
+		{
+			if (viewportScaleDragActive || currentProject == null) return;
+			Element selected = currentProject.SelectedElement;
+			if (selected == null) return;
+
+			int mode = modelrenderer.hitTestViewportScaleGizmo(mouseDownX, mouseDownY);
+			if (mode == 0) return;
+
+			viewportScaleDragMode = mode;
+			viewportScaleDragActive = true;
+			viewportScaleSkipSelection = true;
+			grabbedElem = selected;
+
+			// Cache a stable screen-space axis direction to interpret mouse delta.
+			double[] dir = modelrenderer.getViewportMoveGizmoAxisDirWindow(Math.max(1, Math.min(3, mode)));
+			viewportScaleAxisDirX = dir != null ? dir[0] : 0;
+			viewportScaleAxisDirY = dir != null ? dir[1] : 0;
+			if (mode == 4) {
+				// Uniform: use a diagonal drag gesture (right and up grows, left and down shrinks)
+				viewportScaleAxisDirX = 0.70710678118;
+				viewportScaleAxisDirY = 0.70710678118;
+			}
+
+			// In world-axis mode, use a precise ray-to-axis constraint so scaling feels stable regardless of zoom.
+			viewportScaleUseRayConstraint = false;
+			if (!viewportFreedomModeEnabled && (mode == 1 || mode == 2 || mode == 3)) {
+				viewportScaleAxisOriginX = modelrenderer.viewportMoveGizmoWorldX;
+				viewportScaleAxisOriginY = modelrenderer.viewportMoveGizmoWorldY;
+				viewportScaleAxisOriginZ = modelrenderer.viewportMoveGizmoWorldZ;
+				switch (mode) {
+					case 1: viewportScaleAxisWorldDirX = 1; viewportScaleAxisWorldDirY = 0; viewportScaleAxisWorldDirZ = 0; break;
+					case 2: viewportScaleAxisWorldDirX = 0; viewportScaleAxisWorldDirY = 1; viewportScaleAxisWorldDirZ = 0; break;
+					case 3: viewportScaleAxisWorldDirX = 0; viewportScaleAxisWorldDirY = 0; viewportScaleAxisWorldDirZ = 1; break;
+				}
+				// NOTE: this is the Scale gizmo, so use the Scale axis (not the Move axis).
+				Double t0 = computeScaleAxisParamFromMouse(mouseDownX, mouseDownY);
+				if (t0 != null && Double.isFinite(t0)) {
+					viewportScaleAxisParamStart = t0;
+					viewportScaleUseRayConstraint = true;
+				}
+			}
+
+			// Keyframe tab: scale should animate (stretch) when in Animation tab, not resize the base model.
+			viewportScaleDragInKeyframeMode = (ModelCreator.currentRightTab == 2 && currentProject != null && currentProject.SelectedAnimation != null);
+			viewportScaleDragAnimVersion = viewportScaleDragInKeyframeMode ? currentProject.CurrentAnimVersion() : 0;
+
+			boolean effectiveGroup = viewportGroupMoveEnabled || isViewportSelectionOutOfSync(currentProject);
+
+			// Modeling tab: if multiple elements are selected, resize all of them together.
+			if (!viewportScaleDragInKeyframeMode && currentProject.SelectedElements != null && currentProject.SelectedElements.size() > 1) {
+				viewportScaleElems = new java.util.ArrayList<Element>(currentProject.SelectedElements);
+			} else {
+				viewportScaleElems = getSelectedRootElementsForMove(selected, effectiveGroup);
+			}
+			viewportScaleKeyframeElems = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, AnimFrameElement>() : null;
+			viewportScaleBaseKfSX = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+			viewportScaleBaseKfSY = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+			viewportScaleBaseKfSZ = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+			viewportScaleBaseKfPosX = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+			viewportScaleBaseKfPosY = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+			viewportScaleBaseKfPosZ = viewportScaleDragInKeyframeMode ? new java.util.HashMap<Element, Double>() : null;
+
+			AnimationFrame curAnimFrame = null;
+			if (viewportScaleDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+				int cf = currentProject.SelectedAnimation.currentFrame;
+				if (currentProject.SelectedAnimation.allFrames != null && cf >= 0 && cf < currentProject.SelectedAnimation.allFrames.size()) {
+					curAnimFrame = currentProject.SelectedAnimation.allFrames.get(cf);
+				}
+			}
+
+			viewportScaleBaseStartX = new java.util.HashMap<Element, Double>();
+			viewportScaleBaseStartY = new java.util.HashMap<Element, Double>();
+			viewportScaleBaseStartZ = new java.util.HashMap<Element, Double>();
+			viewportScaleBaseW = new java.util.HashMap<Element, Double>();
+			viewportScaleBaseH = new java.util.HashMap<Element, Double>();
+			viewportScaleBaseD = new java.util.HashMap<Element, Double>();
+
+			for (Element e : viewportScaleElems) {
+				if (e == null) continue;
+				viewportScaleBaseStartX.put(e, e.getStartX());
+				viewportScaleBaseStartY.put(e, e.getStartY());
+				viewportScaleBaseStartZ.put(e, e.getStartZ());
+				viewportScaleBaseW.put(e, e.getWidth());
+				viewportScaleBaseH.put(e, e.getHeight());
+				viewportScaleBaseD.put(e, e.getDepth());
+
+				if (viewportScaleDragInKeyframeMode && currentProject.SelectedAnimation != null) {
+					AnimFrameElement prevKf = currentProject.SelectedAnimation.GetKeyFrameElement(e, currentProject.SelectedAnimation.currentFrame);
+					boolean prevStretchSet = prevKf != null && prevKf.StretchSet;
+
+					AnimFrameElement kf = currentProject.SelectedAnimation.ToggleStretch(e, true);
+					AnimFrameElement frameElem = (curAnimFrame != null) ? curAnimFrame.GetAnimFrameElementRec(e) : null;
+
+					// If we just enabled Stretch, seed it from the current frame so there is no pose snap.
+					if (!prevStretchSet && frameElem != null && kf != null) {
+						kf.setStretchX(frameElem.getStretchX());
+						kf.setStretchY(frameElem.getStretchY());
+						kf.setStretchZ(frameElem.getStretchZ());
+					}
+
+					// Cache drag-start offsets too (needed for floor guard when stretching Y).
+					// If the keyframe doesn't have PositionSet, fall back to the evaluated current frame offsets.
+					double baseOffX = (prevKf != null && prevKf.PositionSet) ? prevKf.getOffsetX() : (frameElem != null ? frameElem.getOffsetX() : 0d);
+					double baseOffY = (prevKf != null && prevKf.PositionSet) ? prevKf.getOffsetY() : (frameElem != null ? frameElem.getOffsetY() : 0d);
+					double baseOffZ = (prevKf != null && prevKf.PositionSet) ? prevKf.getOffsetZ() : (frameElem != null ? frameElem.getOffsetZ() : 0d);
+					if (viewportScaleBaseKfPosX != null) viewportScaleBaseKfPosX.put(e, baseOffX);
+					if (viewportScaleBaseKfPosY != null) viewportScaleBaseKfPosY.put(e, baseOffY);
+					if (viewportScaleBaseKfPosZ != null) viewportScaleBaseKfPosZ.put(e, baseOffZ);
+
+					if (kf != null) {
+						viewportScaleKeyframeElems.put(e, kf);
+						viewportScaleBaseKfSX.put(e, kf.getStretchX());
+						viewportScaleBaseKfSY.put(e, kf.getStretchY());
+						viewportScaleBaseKfSZ.put(e, kf.getStretchZ());
+					} else {
+						viewportScaleBaseKfSX.put(e, 1d);
+						viewportScaleBaseKfSY.put(e, 1d);
+						viewportScaleBaseKfSZ.put(e, 1d);
+						if (viewportScaleBaseKfPosX != null) viewportScaleBaseKfPosX.put(e, baseOffX);
+						if (viewportScaleBaseKfPosY != null) viewportScaleBaseKfPosY.put(e, baseOffY);
+						if (viewportScaleBaseKfPosZ != null) viewportScaleBaseKfPosZ.put(e, baseOffZ);
+					}
+				}
+			}
+
+			// Mirror Mode (modeling): cache partner drag-start bases so we can mirror resize changes.
+			viewportScaleMirrorPartners = null;
+			viewportScaleMirrorBaseStartX = null;
+			viewportScaleMirrorBaseStartY = null;
+			viewportScaleMirrorBaseStartZ = null;
+			viewportScaleMirrorBaseW = null;
+			viewportScaleMirrorBaseH = null;
+			viewportScaleMirrorBaseD = null;
+			if (!viewportScaleDragInKeyframeMode && ModelCreator.mirrorMode && viewportScaleElems != null && viewportScaleElems.size() > 0) {
+				java.util.HashSet<Element> selSet = new java.util.HashSet<Element>(viewportScaleElems);
+				viewportScaleMirrorPartners = new java.util.HashMap<Element, Element>();
+				viewportScaleMirrorBaseStartX = new java.util.HashMap<Element, Double>();
+				viewportScaleMirrorBaseStartY = new java.util.HashMap<Element, Double>();
+				viewportScaleMirrorBaseStartZ = new java.util.HashMap<Element, Double>();
+				viewportScaleMirrorBaseW = new java.util.HashMap<Element, Double>();
+				viewportScaleMirrorBaseH = new java.util.HashMap<Element, Double>();
+				viewportScaleMirrorBaseD = new java.util.HashMap<Element, Double>();
+				for (Element e : viewportScaleElems) {
+					Element partner = FindMirrorPartner(e, currentProject);
+					if (partner != null && !selSet.contains(partner)) {
+						viewportScaleMirrorPartners.put(e, partner);
+						viewportScaleMirrorBaseStartX.put(partner, partner.getStartX());
+						viewportScaleMirrorBaseStartY.put(partner, partner.getStartY());
+						viewportScaleMirrorBaseStartZ.put(partner, partner.getStartZ());
+						viewportScaleMirrorBaseW.put(partner, partner.getWidth());
+						viewportScaleMirrorBaseH.put(partner, partner.getHeight());
+						viewportScaleMirrorBaseD.put(partner, partner.getDepth());
+					}
+				}
+			}
+		}
+
 		/** Returns the axis parameter t for the closest point on the gizmo axis to the current mouse ray. */
 		private Double computeAxisParamFromMouse(int mouseX, int mouseY)
 		{
@@ -996,6 +2120,19 @@ public static boolean renderAttachmentPoints;
 				ray[3], ray[4], ray[5],
 				viewportGizmoAxisOriginX, viewportGizmoAxisOriginY, viewportGizmoAxisOriginZ,
 				viewportGizmoAxisWorldDirX, viewportGizmoAxisWorldDirY, viewportGizmoAxisWorldDirZ
+			);
+		}
+
+		/** Same as {@link #computeAxisParamFromMouse(int, int)} but for the Scale gizmo. */
+		private Double computeScaleAxisParamFromMouse(int mouseX, int mouseY)
+		{
+			double[] ray = modelrenderer.getMouseRayWorld(mouseX, mouseY);
+			if (ray == null) return null;
+			return closestParamRayToAxis(
+				ray[0], ray[1], ray[2],
+				ray[3], ray[4], ray[5],
+				viewportScaleAxisOriginX, viewportScaleAxisOriginY, viewportScaleAxisOriginZ,
+				viewportScaleAxisWorldDirX, viewportScaleAxisWorldDirY, viewportScaleAxisWorldDirZ
 			);
 		}
 
@@ -1032,6 +2169,286 @@ public static boolean renderAttachmentPoints;
 			double t = (a*e - b*d) / den;
 			return t;
 		}
+
+	// ------------------------
+	// Viewport snapping helpers
+	// ------------------------
+
+	private static double getViewportGridSnapStep()
+	{
+		double step = ModelCreator.viewportGridSnapStepQ / 4.0;
+		if (!Double.isFinite(step) || step <= 0) step = 1.0;
+		return Math.max(0.25, step);
+	}
+
+	/**
+	 * Applies grid snap and/or vertex snap to a desired WORLD delta, relative to the drag-start gizmo pivot.
+	 */
+	private double[] applyViewportMoveSnapping(double dwx, double dwy, double dwz, boolean allowX, boolean allowY, boolean allowZ)
+	{
+		double sx = dwx, sy = dwy, sz = dwz;
+
+		if (ModelCreator.viewportGridSnapEnabled) {
+			double step = getViewportGridSnapStep();
+			if (allowX) {
+				double target = viewportGizmoDragPivotWorldX + sx;
+				double snapped = Math.round(target / step) * step;
+				sx = snapped - viewportGizmoDragPivotWorldX;
+			}
+			if (allowY) {
+				double target = viewportGizmoDragPivotWorldY + sy;
+				double snapped = Math.round(target / step) * step;
+				sy = snapped - viewportGizmoDragPivotWorldY;
+			}
+			if (allowZ) {
+				double target = viewportGizmoDragPivotWorldZ + sz;
+				double snapped = Math.round(target / step) * step;
+				sz = snapped - viewportGizmoDragPivotWorldZ;
+			}
+		}
+
+		if (ModelCreator.viewportVertexSnapEnabled && viewportVertexSnapTargets != null && viewportVertexSnapBaseCorners != null && viewportVertexSnapTargets.size() > 0) {
+			// Vertex snapping needs to feel "magnetic" rather than "pixel-perfect".
+			// In ModelCreator space (0..16 per block), ~1 unit is a nice, usable radius.
+			double baseThresh = 1.0;
+			if (ModelCreator.viewportGridSnapEnabled) baseThresh = Math.max(baseThresh, getViewportGridSnapStep() * 1.25);
+			double thresh2 = baseThresh * baseThresh;
+
+			double bestD2 = Double.POSITIVE_INFINITY;
+			double bestOffX = 0, bestOffY = 0, bestOffZ = 0;
+
+			for (int i = 0; i < viewportVertexSnapBaseCorners.length; i++) {
+				double[] bc = viewportVertexSnapBaseCorners[i];
+				if (bc == null || bc.length < 3) continue;
+				double mx = bc[0] + sx;
+				double my = bc[1] + sy;
+				double mz = bc[2] + sz;
+
+				for (int j = 0; j < viewportVertexSnapTargets.size(); j++) {
+					double[] tv = viewportVertexSnapTargets.get(j);
+					if (tv == null || tv.length < 3) continue;
+					double dx = tv[0] - mx;
+					double dy = tv[1] - my;
+					double dz = tv[2] - mz;
+					double d2 = 0;
+					if (allowX) d2 += dx*dx;
+					if (allowY) d2 += dy*dy;
+					if (allowZ) d2 += dz*dz;
+					if (!allowX && !allowY && !allowZ) d2 = dx*dx + dy*dy + dz*dz;
+					if (d2 < bestD2) {
+						bestD2 = d2;
+						bestOffX = dx;
+						bestOffY = dy;
+						bestOffZ = dz;
+					}
+				}
+			}
+
+			if (bestD2 <= thresh2) {
+				if (!allowX) bestOffX = 0;
+				if (!allowY) bestOffY = 0;
+				if (!allowZ) bestOffZ = 0;
+				sx += bestOffX;
+				sy += bestOffY;
+				sz += bestOffZ;
+			}
+		}
+
+		return new double[] { sx, sy, sz };
+	}
+
+		private static void collectDescendants(Element root, java.util.HashSet<Element> out)
+		{
+			if (root == null || out == null) return;
+			java.util.ArrayDeque<Element> st = new java.util.ArrayDeque<Element>();
+			st.push(root);
+			while (!st.isEmpty()) {
+				Element e = st.pop();
+				if (e == null) continue;
+				if (!out.add(e)) continue;
+				if (e.ChildElements != null) {
+					for (int i = 0; i < e.ChildElements.size(); i++) {
+						st.push(e.ChildElements.get(i));
+					}
+				}
+			}
+		}
+
+		/** Returns true if {@code candidate} is {@code root} or a descendant of {@code root}. */
+		private static boolean isInSubtree(Element root, Element candidate)
+		{
+			if (root == null || candidate == null) return false;
+			Element p = candidate;
+			while (p != null) {
+				if (p == root) return true;
+				p = p.ParentElement;
+			}
+			return false;
+		}
+		// -------------------------
+		// Snapping helpers (vertex/grid)
+		// -------------------------
+
+		private double[][] computeMovedGroupBaseCorners(java.util.List<Element> movedRoots, AnimationFrame curFrame, boolean keyframeMode, java.util.HashMap<Element, AnimFrameElement> kfMap)
+	{
+		if (movedRoots == null || movedRoots.size() == 0) return null;
+
+		// Collect *actual* element corners (not just the group's AABB) so vertex snapping can
+		// truly snap "corner to corner" even with rotations and multi-element selections.
+		java.util.ArrayList<double[]> corners = new java.util.ArrayList<double[]>(64);
+
+		for (Element r : movedRoots) {
+			if (r == null) continue;
+			java.util.ArrayDeque<Element> stack = new java.util.ArrayDeque<Element>();
+			stack.push(r);
+			while (!stack.isEmpty()) {
+				Element e = stack.pop();
+				if (e == null) continue;
+
+				double[][] cs = computeElementRootCornersWithAnim(e, curFrame, keyframeMode, kfMap);
+				if (cs != null) {
+					for (int i = 0; i < cs.length; i++) {
+						corners.add(cs[i]);
+						if (corners.size() > 4096) break; // sanity cap
+					}
+				}
+
+				if (e.ChildElements != null) {
+					for (int i = 0; i < e.ChildElements.size(); i++) {
+						stack.push(e.ChildElements.get(i));
+					}
+				}
+			}
+		}
+
+		if (corners.isEmpty()) return null;
+		double[][] out = new double[corners.size()][3];
+		for (int i = 0; i < corners.size(); i++) {
+			out[i] = corners.get(i);
+		}
+		return out;
+	}
+
+
+	private java.util.ArrayList<double[]> computeVertexSnapTargets(Project project, java.util.List<Element> movedRoots, AnimationFrame curFrame, boolean keyframeMode, java.util.HashMap<Element, AnimFrameElement> kfMap)
+	{
+		if (project == null) return null;
+		java.util.HashSet<Element> exclude = new java.util.HashSet<Element>();
+		if (movedRoots != null) {
+			for (Element r : movedRoots) collectDescendants(r, exclude);
+		}
+
+		java.util.ArrayList<double[]> out = new java.util.ArrayList<double[]>();
+		java.util.ArrayDeque<Element> stack = new java.util.ArrayDeque<Element>();
+		if (project.rootElements != null) {
+			for (int i = 0; i < project.rootElements.size(); i++) stack.push(project.rootElements.get(i));
+		}
+
+		while (!stack.isEmpty()) {
+			Element e = stack.pop();
+			if (e == null) continue;
+			if (!exclude.isEmpty() && exclude.contains(e)) {
+				// Still traverse to mark children as excluded (already in set), but no target corners.
+			} else {
+				double[][] corners = computeElementRootCornersWithAnim(e, curFrame, keyframeMode, kfMap);
+				if (corners != null) {
+					for (int i = 0; i < corners.length; i++) {
+						double[] c = corners[i];
+						if (c != null && c.length >= 3) out.add(new double[] { c[0], c[1], c[2] });
+					}
+				}
+			}
+			if (e.ChildElements != null) {
+				for (int i = 0; i < e.ChildElements.size(); i++) stack.push(e.ChildElements.get(i));
+			}
+		}
+
+		return out;
+	}
+
+	private double[] computeElementRootBoundsWithAnim(Element elem, AnimationFrame curFrame, boolean keyframeMode, java.util.HashMap<Element, AnimFrameElement> kfMap)
+	{
+		double[][] corners = computeElementRootCornersWithAnim(elem, curFrame, keyframeMode, kfMap);
+		if (corners == null) return null;
+
+		double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY, minZ = Double.POSITIVE_INFINITY;
+		double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+		for (int i = 0; i < corners.length; i++) {
+			double[] c = corners[i];
+			if (c == null || c.length < 3) continue;
+			minX = Math.min(minX, c[0]);
+			minY = Math.min(minY, c[1]);
+			minZ = Math.min(minZ, c[2]);
+			maxX = Math.max(maxX, c[0]);
+			maxY = Math.max(maxY, c[1]);
+			maxZ = Math.max(maxZ, c[2]);
+		}
+		if (!Double.isFinite(minX) || !Double.isFinite(maxX)) return null;
+		return new double[] { minX, minY, minZ, maxX, maxY, maxZ };
+	}
+
+	private double[][] computeElementRootCornersWithAnim(Element elem, AnimationFrame curFrame, boolean keyframeMode, java.util.HashMap<Element, AnimFrameElement> kfMap)
+	{
+		if (elem == null) return null;
+
+		float[] mat = Mat4f.Identity_(new float[16]);
+
+		java.util.List<Element> path = elem.GetParentPath();
+		if (path != null) {
+			for (Element p : path) {
+				applyTransformWithAnimOffset(mat, p, curFrame, keyframeMode, kfMap);
+			}
+		}
+		applyTransformWithAnimOffset(mat, elem, curFrame, keyframeMode, kfMap);
+
+		double w = elem.getWidth();
+		double h = elem.getHeight();
+		double d = elem.getDepth();
+
+		double[][] local = new double[][] {
+			{0, 0, 0}, {w, 0, 0}, {0, h, 0}, {0, 0, d},
+			{w, h, 0}, {w, 0, d}, {0, h, d}, {w, h, d}
+		};
+
+		double[][] out = new double[8][3];
+		for (int i = 0; i < local.length; i++) {
+			double[] c = local[i];
+			float[] v = Mat4f.MulWithVec4(mat, new float[] { (float)c[0], (float)c[1], (float)c[2], 1f });
+			out[i][0] = v[0];
+			out[i][1] = v[1];
+			out[i][2] = v[2];
+		}
+		return out;
+	}
+
+	private void applyTransformWithAnimOffset(float[] mat, Element elem, AnimationFrame curFrame, boolean keyframeMode, java.util.HashMap<Element, AnimFrameElement> kfMap)
+	{
+		if (elem == null) return;
+		double offX = 0, offY = 0, offZ = 0;
+
+		AnimFrameElement afe = null;
+		if (keyframeMode && kfMap != null) {
+			afe = kfMap.get(elem);
+		}
+		if (afe == null && curFrame != null) {
+			afe = curFrame.GetAnimFrameElementRec(elem);
+			if (afe == null) afe = curFrame.GetAnimFrameElementRecByName(elem.getName());
+		}
+		if (afe != null) {
+			offX = afe.getOffsetX();
+			offY = afe.getOffsetY();
+			offZ = afe.getOffsetZ();
+		}
+
+		Mat4f.Translate(mat, mat, new float[] { (float)elem.getOriginX(), (float)elem.getOriginY(), (float)elem.getOriginZ() });
+		Mat4f.RotateX(mat, mat, (float)elem.getRotationX() * GameMath.DEG2RAD);
+		Mat4f.RotateY(mat, mat, (float)elem.getRotationY() * GameMath.DEG2RAD);
+		Mat4f.RotateZ(mat, mat, (float)elem.getRotationZ() * GameMath.DEG2RAD);
+		Mat4f.Translate(mat, mat, new float[] { (float)-elem.getOriginX(), (float)-elem.getOriginY(), (float)-elem.getOriginZ() });
+
+		Mat4f.Translate(mat, mat, new float[] { (float)(elem.getStartX() + offX), (float)(elem.getStartY() + offY), (float)(elem.getStartZ() + offZ) });
+	}
+
 
 		/**
 		 * Builds a world-rotation matrix (4x4) for the given element, including all parent rotations,
@@ -1253,7 +2670,66 @@ public static boolean renderAttachmentPoints;
 					viewportGizmoDragInKeyframeMode = false;
 					viewportGizmoDragAnimVersion = 0;
 					viewportGizmoKeyframeElems = null;
+			viewportGizmoMirrorPartners = null;
+			viewportGizmoMirrorBaseX = null;
+			viewportGizmoMirrorBaseY = null;
+			viewportGizmoMirrorBaseZ = null;
 					viewportGizmoSkipSelection = false;
+viewportRotateDragActive = false;
+viewportRotateDragAxis = 0;
+viewportRotateElems = null;
+viewportRotateBaseRotX = null;
+viewportRotateBaseRotY = null;
+viewportRotateBaseRotZ = null;
+viewportRotateBaseStartX = null;
+viewportRotateBaseStartY = null;
+viewportRotateBaseStartZ = null;
+viewportRotateWorldAxisToLocal = null;
+viewportRotateDragInKeyframeMode = false;
+viewportRotateDragAnimVersion = 0;
+viewportRotateKeyframeElems = null;
+viewportRotateBaseKfRotX = null;
+viewportRotateBaseKfRotY = null;
+viewportRotateBaseKfRotZ = null;
+viewportRotateBaseKfPosX = null;
+viewportRotateBaseKfPosY = null;
+viewportRotateBaseKfPosZ = null;
+viewportRotateBaseCenterWorld = null;
+viewportRotateSkipSelection = false;
+
+				// Scale gizmo drag state
+				viewportScaleDragActive = false;
+				viewportScaleDragMode = 0;
+				viewportScaleAxisDirX = 0;
+				viewportScaleAxisDirY = 0;
+				viewportScaleUseRayConstraint = false;
+				viewportScaleAxisOriginX = viewportScaleAxisOriginY = viewportScaleAxisOriginZ = 0;
+				viewportScaleAxisWorldDirX = viewportScaleAxisWorldDirY = viewportScaleAxisWorldDirZ = 0;
+				viewportScaleAxisParamStart = 0;
+				viewportScaleElems = null;
+				viewportScaleBaseStartX = null;
+				viewportScaleBaseStartY = null;
+				viewportScaleBaseStartZ = null;
+				viewportScaleBaseW = null;
+				viewportScaleBaseH = null;
+				viewportScaleBaseD = null;
+				viewportScaleDragInKeyframeMode = false;
+				viewportScaleDragAnimVersion = 0;
+				viewportScaleKeyframeElems = null;
+				viewportScaleBaseKfSX = null;
+				viewportScaleBaseKfSY = null;
+				viewportScaleBaseKfSZ = null;
+				viewportScaleBaseKfPosX = null;
+				viewportScaleBaseKfPosY = null;
+				viewportScaleBaseKfPosZ = null;
+				viewportScaleMirrorPartners = null;
+				viewportScaleMirrorBaseStartX = null;
+				viewportScaleMirrorBaseStartY = null;
+				viewportScaleMirrorBaseStartZ = null;
+				viewportScaleMirrorBaseW = null;
+				viewportScaleMirrorBaseH = null;
+				viewportScaleMirrorBaseD = null;
+				viewportScaleSkipSelection = false;
 				grabbing = true;
 			}
 			
@@ -1263,10 +2739,16 @@ public static boolean renderAttachmentPoints;
 				mouseDownOnRightPanel = isOnRightPanel;
 			}
 
-					// Try start a move gizmo drag (axis or center handle) when clicking in the viewport
-					if (mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithShift) {
+				// Try start a viewport gizmo drag when clicking in the viewport
+				if (!ModelCreator.viewportGizmoHidden && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithShift) {
+					if (ModelCreator.viewportGizmoMode == ModelCreator.VIEWPORT_GIZMO_MODE_ROTATE) {
+						tryStartViewportRotateGizmoDrag();
+					} else if (ModelCreator.viewportGizmoMode == ModelCreator.VIEWPORT_GIZMO_MODE_SCALE) {
+						tryStartViewportScaleGizmoDrag();
+					} else {
 						tryStartViewportGizmoDrag();
 					}
+				}
 
 					// Begin viewport marquee selection on Shift + left mouse drag
 					if (!viewportGizmoDragActive && mouseDownOnCenterPanel && mouseDownButton == 0 && mouseDownWithShift && !mouseDownWithCtrl) {
@@ -1282,7 +2764,7 @@ public static boolean renderAttachmentPoints;
 		else
 		{
 			// Mouse button(s) released
-			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl && !viewportGizmoSkipSelection) {
+			if (grabbing && mouseDownOnCenterPanel && mouseDownButton == 0 && !mouseDownWithCtrl && !viewportGizmoSkipSelection && !viewportRotateSkipSelection && !viewportScaleSkipSelection) {
 				int dx = Math.abs(Mouse.getX() - mouseDownX);
 				int dy = Math.abs(Mouse.getY() - mouseDownY);
 				// Shift + drag: marquee multi-select. Shift + click: add to selection.
@@ -1310,7 +2792,7 @@ public static boolean renderAttachmentPoints;
 							// If group-move is enabled and the user clicked an already-selected element,
 							// keep the multi-selection intact: only change the active element/face.
 							Element hitElem = findElementByFaceOpenGlName(openGlName);
-							boolean hitIsPartOfMultiSelection = viewportGroupMoveEnabled
+							boolean hitIsPartOfMultiSelection = (viewportGroupMoveEnabled || isViewportSelectionOutOfSync(currentProject))
 									&& hitElem != null
 									&& currentProject.SelectedElements != null
 									&& currentProject.SelectedElements.size() > 1
@@ -1335,6 +2817,15 @@ public static boolean renderAttachmentPoints;
 								@Override
 								public void run() { updateValues(null); }
 							});
+						} else {
+							// Clicked empty space in the 3D viewport: clear selection.
+							// (Keeps Shift+click semantics intact for multi-select workflows.)
+							currentProject.selectElement(null);
+							currentProject.SelectedElements = new ArrayList<Element>();
+							SwingUtilities.invokeLater(new Runnable() {
+								@Override
+								public void run() { updateValues(null); }
+							});
 						}
 					}
 				}
@@ -1344,6 +2835,22 @@ public static boolean renderAttachmentPoints;
 			viewportMarqueeActive = false;
 			modelrenderer.setViewportMarquee(false, 0, 0, 0, 0);
 
+			// Optional: auto-fix Z-fighting after dropping/moving elements (performance-friendly: run once on drop)
+			if (autofixZFighting && currentRightTab == 0 && currentProject != null) {
+				// Capture moved elements before clearing drag state
+				java.util.List<Element> moved = null;
+				if (viewportGizmoElems != null && viewportGizmoElems.size() > 0 && !viewportGizmoDragInKeyframeMode) {
+					moved = new java.util.ArrayList<Element>(viewportGizmoElems);
+				}
+				// Fallback: selected element (covers non-gizmo changes like duplicate + immediate release)
+				if ((moved == null || moved.size() == 0) && currentProject.SelectedElement != null) {
+					moved = java.util.Arrays.asList(currentProject.SelectedElement);
+				}
+				if (moved != null && moved.size() > 0) {
+					currentProject.autoFixZFighting(moved, autofixZFightingEpsilon, true);
+				}
+			}
+
 			viewportGizmoDragActive = false;
 			viewportGizmoDragMode = 0;
 			viewportGizmoUseRayConstraint = false;
@@ -1352,6 +2859,69 @@ public static boolean renderAttachmentPoints;
 			viewportGizmoBaseX = null;
 			viewportGizmoBaseZ = null;
 			viewportGizmoSkipSelection = false;
+
+viewportRotateDragActive = false;
+viewportRotateDragAxis = 0;
+viewportRotateElems = null;
+viewportRotateBaseRotX = null;
+viewportRotateBaseRotY = null;
+viewportRotateBaseRotZ = null;
+viewportRotateBaseStartX = null;
+viewportRotateBaseStartY = null;
+viewportRotateBaseStartZ = null;
+viewportRotateWorldAxisToLocal = null;
+viewportRotateDragInKeyframeMode = false;
+viewportRotateDragAnimVersion = 0;
+viewportRotateKeyframeElems = null;
+viewportRotateBaseKfRotX = null;
+viewportRotateBaseKfRotY = null;
+viewportRotateBaseKfRotZ = null;
+viewportRotateBaseKfPosX = null;
+viewportRotateBaseKfPosY = null;
+viewportRotateBaseKfPosZ = null;
+viewportRotateBaseCenterWorld = null;
+viewportRotateMirrorPartners = null;
+viewportRotateMirrorBaseRotX = null;
+viewportRotateMirrorBaseRotY = null;
+viewportRotateMirrorBaseRotZ = null;
+viewportRotateMirrorBaseStartX = null;
+viewportRotateMirrorBaseStartY = null;
+viewportRotateMirrorBaseStartZ = null;
+viewportRotateSkipSelection = false;
+
+// Scale gizmo drag state
+viewportScaleDragActive = false;
+viewportScaleDragMode = 0;
+viewportScaleAxisDirX = 0;
+viewportScaleAxisDirY = 0;
+viewportScaleUseRayConstraint = false;
+viewportScaleAxisOriginX = viewportScaleAxisOriginY = viewportScaleAxisOriginZ = 0;
+viewportScaleAxisWorldDirX = viewportScaleAxisWorldDirY = viewportScaleAxisWorldDirZ = 0;
+viewportScaleAxisParamStart = 0;
+viewportScaleElems = null;
+viewportScaleBaseStartX = null;
+viewportScaleBaseStartY = null;
+viewportScaleBaseStartZ = null;
+viewportScaleBaseW = null;
+viewportScaleBaseH = null;
+viewportScaleBaseD = null;
+viewportScaleDragInKeyframeMode = false;
+viewportScaleDragAnimVersion = 0;
+viewportScaleKeyframeElems = null;
+viewportScaleBaseKfSX = null;
+viewportScaleBaseKfSY = null;
+viewportScaleBaseKfSZ = null;
+viewportScaleBaseKfPosX = null;
+viewportScaleBaseKfPosY = null;
+viewportScaleBaseKfPosZ = null;
+viewportScaleMirrorPartners = null;
+viewportScaleMirrorBaseStartX = null;
+viewportScaleMirrorBaseStartY = null;
+viewportScaleMirrorBaseStartZ = null;
+viewportScaleMirrorBaseW = null;
+viewportScaleMirrorBaseH = null;
+viewportScaleMirrorBaseD = null;
+viewportScaleSkipSelection = false;
 
 			grabbedElem = null;
 			
@@ -1386,6 +2956,472 @@ public static boolean renderAttachmentPoints;
 				marqueeCurX = Mouse.getX();
 				marqueeCurY = Mouse.getY();
 				modelrenderer.setViewportMarquee(true, marqueeStartX, marqueeStartY, marqueeCurX, marqueeCurY);
+			}
+
+
+// Viewport rotate gizmo drag (gimbal rings)
+if (grabbing && viewportRotateDragActive && mouseDownOnCenterPanel && mouseDownButton == 0 && Mouse.isButtonDown(0) && viewportRotateElems != null)
+{
+	int newMouseX = Mouse.getX();
+	int newMouseY = Mouse.getY();
+	int dx = newMouseX - lastMouseX;
+	int dy = newMouseY - lastMouseY;
+
+	if (dx != 0 || dy != 0)
+	{
+		ModelCreator.changeHistory.beginMultichangeHistoryState();
+					lastMouseX = newMouseX;
+					lastMouseY = newMouseY;
+
+		double[] ray = modelrenderer.getMouseRayWorld(newMouseX, newMouseY);
+		if (ray != null) {
+			double r0x = ray[0], r0y = ray[1], r0z = ray[2];
+			double rdx = ray[3], rdy = ray[4], rdz = ray[5];
+
+			double nx = 0, ny = 0, nz = 0;
+			if (viewportRotateDragAxis == 1) nx = 1;
+			if (viewportRotateDragAxis == 2) ny = 1;
+			if (viewportRotateDragAxis == 3) nz = 1;
+
+			double denom = nx*rdx + ny*rdy + nz*rdz;
+			if (Math.abs(denom) > 1e-9) {
+				double t = (nx*(viewportRotatePivotX - r0x) + ny*(viewportRotatePivotY - r0y) + nz*(viewportRotatePivotZ - r0z)) / denom;
+				double ix = r0x + rdx * t;
+				double iy = r0y + rdy * t;
+				double iz = r0z + rdz * t;
+
+				double vx = ix - viewportRotatePivotX;
+				double vy = iy - viewportRotatePivotY;
+				double vz = iz - viewportRotatePivotZ;
+
+				double dot = vx*nx + vy*ny + vz*nz;
+				vx -= dot * nx;
+				vy -= dot * ny;
+				vz -= dot * nz;
+
+				double vlen = Math.sqrt(vx*vx + vy*vy + vz*vz);
+				if (Double.isFinite(vlen) && vlen > 1e-9) {
+					vx /= vlen;
+					vy /= vlen;
+					vz /= vlen;
+
+					// Signed angle from start vector to current vector around the chosen axis
+					double cxv = viewportRotateStartVy * vz - viewportRotateStartVz * vy;
+					double cyv = viewportRotateStartVz * vx - viewportRotateStartVx * vz;
+					double czv = viewportRotateStartVx * vy - viewportRotateStartVy * vx;
+					double sin = cxv*nx + cyv*ny + czv*nz;
+					double cos = viewportRotateStartVx*vx + viewportRotateStartVy*vy + viewportRotateStartVz*vz;
+					double ang = Math.atan2(sin, cos);
+					double deg = ang * 180.0 / Math.PI;
+
+					for (Element e : viewportRotateElems) {
+						if (e == null) continue;
+
+						Double brx = viewportRotateBaseRotX != null ? viewportRotateBaseRotX.get(e) : null;
+						Double bry = viewportRotateBaseRotY != null ? viewportRotateBaseRotY.get(e) : null;
+						Double brz = viewportRotateBaseRotZ != null ? viewportRotateBaseRotZ.get(e) : null;
+						if (brx == null || bry == null || brz == null) continue;
+
+						AnimFrameElement kf = (viewportRotateDragInKeyframeMode && viewportRotateKeyframeElems != null) ? viewportRotateKeyframeElems.get(e) : null;
+
+						// Rotation
+						if (viewportRotateDragInKeyframeMode && kf != null) {
+							Double kx = viewportRotateBaseKfRotX != null ? viewportRotateBaseKfRotX.get(e) : 0d;
+							Double ky = viewportRotateBaseKfRotY != null ? viewportRotateBaseKfRotY.get(e) : 0d;
+							Double kz = viewportRotateBaseKfRotZ != null ? viewportRotateBaseKfRotZ.get(e) : 0d;
+							if (kx == null) kx = 0d;
+							if (ky == null) ky = 0d;
+							if (kz == null) kz = 0d;
+
+							switch (viewportRotateDragAxis) {
+								case 1: kf.setRotationX(kx + deg); break;
+								case 2: kf.setRotationY(ky + deg); break;
+								case 3: kf.setRotationZ(kz + deg); break;
+								default: break;
+							}
+						} else {
+							switch (viewportRotateDragAxis) {
+								case 1: e.setRotationX(brx + deg); break;
+								case 2: e.setRotationY(bry + deg); break;
+								case 3: e.setRotationZ(brz + deg); break;
+								default: break;
+							}
+						}
+
+							// Mirror Mode (modeling): apply mirrored rotation to L/R partner
+							if (!viewportRotateDragInKeyframeMode && ModelCreator.mirrorMode && viewportRotateMirrorPartners != null) {
+								Element partner = viewportRotateMirrorPartners.get(e);
+								if (partner != null && viewportRotateMirrorBaseRotX != null && viewportRotateMirrorBaseRotY != null && viewportRotateMirrorBaseRotZ != null) {
+									double mdeg = deg;
+									at.vintagestory.modelcreator.enums.EnumAxis maxis = GetMirrorAxis(currentProject);
+									if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.X) {
+										if (viewportRotateDragAxis != 1) mdeg = -deg;
+									} else if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.Z) {
+										if (viewportRotateDragAxis != 3) mdeg = -deg;
+									}
+									Double pbrx = viewportRotateMirrorBaseRotX.get(partner);
+									Double pbry = viewportRotateMirrorBaseRotY.get(partner);
+									Double pbrz = viewportRotateMirrorBaseRotZ.get(partner);
+									if (pbrx == null) pbrx = partner.getRotationX();
+									if (pbry == null) pbry = partner.getRotationY();
+									if (pbrz == null) pbrz = partner.getRotationZ();
+									switch (viewportRotateDragAxis) {
+										case 1: partner.setRotationX(pbrx + mdeg); break;
+										case 2: partner.setRotationY(pbry + mdeg); break;
+										case 3: partner.setRotationZ(pbrz + mdeg); break;
+										default: break;
+									}
+								}
+							}
+
+						// Group-pivot orbit: rotate the reference center around the shared pivot and apply as translation delta.
+						if (viewportRotateGroupPivotEnabled) {
+							double[] baseCenter = viewportRotateBaseCenterWorld != null ? viewportRotateBaseCenterWorld.get(e) : null;
+							if (baseCenter != null && baseCenter.length >= 3) {
+								double ox = baseCenter[0], oy = baseCenter[1], oz = baseCenter[2];
+								double nxp = ox, nyp = oy, nzp = oz;
+								double s = Math.sin(ang);
+								double c = Math.cos(ang);
+								switch (viewportRotateDragAxis) {
+									case 1: {
+										double dyc = oy - viewportRotatePivotY;
+										double dzc = oz - viewportRotatePivotZ;
+										nyp = viewportRotatePivotY + dyc * c - dzc * s;
+										nzp = viewportRotatePivotZ + dyc * s + dzc * c;
+										break;
+									}
+									case 2: {
+										double dxc = ox - viewportRotatePivotX;
+										double dzc = oz - viewportRotatePivotZ;
+										nxp = viewportRotatePivotX + dxc * c + dzc * s;
+										nzp = viewportRotatePivotZ - dxc * s + dzc * c;
+										break;
+									}
+									case 3: {
+										double dxc = ox - viewportRotatePivotX;
+										double dyc = oy - viewportRotatePivotY;
+										nxp = viewportRotatePivotX + dxc * c - dyc * s;
+										nyp = viewportRotatePivotY + dxc * s + dyc * c;
+										break;
+									}
+									default: break;
+								}
+
+								double dwx = nxp - ox;
+								double dwy = nyp - oy;
+								double dwz = nzp - oz;
+
+								double[] map = viewportRotateWorldAxisToLocal != null ? viewportRotateWorldAxisToLocal.get(e) : null;
+								if (map != null && map.length >= 9) {
+									double ldx = dwx * map[0] + dwy * map[3] + dwz * map[6];
+									double ldy = dwx * map[1] + dwy * map[4] + dwz * map[7];
+									double ldz = dwx * map[2] + dwy * map[5] + dwz * map[8];
+
+									if (viewportRotateDragInKeyframeMode && kf != null) {
+										Double bx = viewportRotateBaseKfPosX != null ? viewportRotateBaseKfPosX.get(e) : 0d;
+										Double by = viewportRotateBaseKfPosY != null ? viewportRotateBaseKfPosY.get(e) : 0d;
+										Double bz = viewportRotateBaseKfPosZ != null ? viewportRotateBaseKfPosZ.get(e) : 0d;
+										if (bx == null) bx = 0d;
+										if (by == null) by = 0d;
+										if (bz == null) bz = 0d;
+										kf.setOffsetX(bx + ldx);
+										kf.setOffsetY(by + ldy);
+										kf.setOffsetZ(bz + ldz);
+									} else {
+										Double bsx = viewportRotateBaseStartX != null ? viewportRotateBaseStartX.get(e) : null;
+										Double bsy = viewportRotateBaseStartY != null ? viewportRotateBaseStartY.get(e) : null;
+										Double bsz = viewportRotateBaseStartZ != null ? viewportRotateBaseStartZ.get(e) : null;
+										if (bsx != null && bsy != null && bsz != null) {
+											e.setStartX(bsx + ldx);
+											e.setStartY(bsy + ldy);
+											e.setStartZ(bsz + ldz);
+
+											// Mirror Mode (modeling): apply mirrored orbit translation to L/R partner
+											if (!viewportRotateDragInKeyframeMode && ModelCreator.mirrorMode && viewportRotateMirrorPartners != null && viewportRotateMirrorBaseStartX != null) {
+												Element partner = viewportRotateMirrorPartners.get(e);
+												if (partner != null) {
+													at.vintagestory.modelcreator.enums.EnumAxis maxis = GetMirrorAxis(currentProject);
+													double pdx = ldx, pdy = ldy, pdz = ldz;
+													if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.X) pdx = -ldx;
+													if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.Z) pdz = -ldz;
+													Double pbsx = viewportRotateMirrorBaseStartX.get(partner);
+													Double pbsy = viewportRotateMirrorBaseStartY != null ? viewportRotateMirrorBaseStartY.get(partner) : null;
+													Double pbsz = viewportRotateMirrorBaseStartZ != null ? viewportRotateMirrorBaseStartZ.get(partner) : null;
+													if (pbsx == null) pbsx = partner.getStartX();
+													if (pbsy == null) pbsy = partner.getStartY();
+													if (pbsz == null) pbsz = partner.getStartZ();
+													partner.setStartX(pbsx + pdx);
+													partner.setStartY(pbsy + pdy);
+													partner.setStartZ(pbsz + pdz);
+												}
+											}
+										}
+									}
+								}
+
+							}
+						}
+						if (viewportRotateDragInKeyframeMode && kf != null) { SyncMirrorKeyframe(kf, viewportRotateElems); }
+					}
+				}
+
+
+
+						// Ensure animation preview updates in real time while dragging in Keyframe mode.
+						if (viewportRotateDragInKeyframeMode && currentProject != null && currentProject.SelectedAnimation != null) {
+							currentProject.SelectedAnimation.SetFramesDirty();
+						}
+			}
+		}
+	}
+}
+
+			// Viewport scale gizmo drag (axis handles + center uniform)
+			if (grabbing && viewportScaleDragActive && mouseDownOnCenterPanel && mouseDownButton == 0 && Mouse.isButtonDown(0) && viewportScaleElems != null)
+			{
+				int newMouseX = Mouse.getX();
+				int newMouseY = Mouse.getY();
+				int ddx = newMouseX - mouseDownX;
+				int ddy = newMouseY - mouseDownY;
+
+				if (ddx != 0 || ddy != 0)
+				{
+					ModelCreator.changeHistory.beginMultichangeHistoryState();
+
+					// Determine drag delta in world units when possible.
+					double delta = 0;
+					boolean haveDelta = false;
+					if (viewportScaleDragMode != 4 && viewportScaleUseRayConstraint && !viewportFreedomModeEnabled)
+					{
+						Double tcur = computeScaleAxisParamFromMouse(newMouseX, newMouseY);
+						if (tcur != null && Double.isFinite(tcur)) {
+							delta = tcur - viewportScaleAxisParamStart;
+							haveDelta = true;
+						}
+					}
+					if (!haveDelta) {
+						// Fallback: interpret mouse delta in screen space along the axis direction.
+						if (viewportScaleDragMode == 4) {
+							// Uniform: diagonal gesture (right+up grows).
+							delta = (ddx + ddy) / 40.0;
+						} else {
+							delta = (ddx * viewportScaleAxisDirX + ddy * viewportScaleAxisDirY) / 20.0;
+						}
+					}
+
+					if (viewportScaleDragInKeyframeMode && currentProject != null && currentProject.SelectedAnimation != null)
+					{
+						// Animation tab: Scale gizmo drives Stretch (multiplicative)
+						double factor = 1.0 + delta / 10.0;
+						if (!Double.isFinite(factor)) factor = 1.0;
+						factor = Math.max(0.01, Math.min(100.0, factor));
+
+						// We may need current evaluated offsets (for seeding PositionSet when floor guard engages)
+						AnimationFrame curAnimFrame = null;
+						int curFrameIndex = currentProject.SelectedAnimation.currentFrame;
+						if (currentProject.SelectedAnimation.allFrames != null && curFrameIndex >= 0 && curFrameIndex < currentProject.SelectedAnimation.allFrames.size()) {
+							curAnimFrame = currentProject.SelectedAnimation.allFrames.get(curFrameIndex);
+						}
+
+						for (Element e : viewportScaleElems) {
+							if (e == null) continue;
+							AnimFrameElement kf = viewportScaleKeyframeElems != null ? viewportScaleKeyframeElems.get(e) : null;
+							if (kf == null) continue;
+							Double bsx = viewportScaleBaseKfSX != null ? viewportScaleBaseKfSX.get(e) : null;
+							Double bsy = viewportScaleBaseKfSY != null ? viewportScaleBaseKfSY.get(e) : null;
+							Double bsz = viewportScaleBaseKfSZ != null ? viewportScaleBaseKfSZ.get(e) : null;
+							if (bsx == null) bsx = 1d;
+							if (bsy == null) bsy = 1d;
+							if (bsz == null) bsz = 1d;
+
+							double nsx = bsx, nsy = bsy, nsz = bsz;
+							switch (viewportScaleDragMode) {
+								case 1: nsx = bsx * factor; break;
+								case 2: nsy = bsy * factor; break;
+								case 3: nsz = bsz * factor; break;
+								case 4: nsx = bsx * factor; nsy = bsy * factor; nsz = bsz * factor; break;
+								default: break;
+							}
+							nsx = Math.max(0.01, Math.min(100.0, nsx));
+							nsy = Math.max(0.01, Math.min(100.0, nsy));
+							nsz = Math.max(0.01, Math.min(100.0, nsz));
+							kf.setStretchX(nsx);
+							kf.setStretchY(nsy);
+							kf.setStretchZ(nsz);
+
+							// Floor guard in animation mode: stretching around a non-bottom origin can push the element below its
+							// drag-start "floor". When enabled, we compensate by nudging OffsetY up (in a single undo step).
+							if (viewportFloorSnapEnabled && (viewportScaleDragMode == 2 || viewportScaleDragMode == 4)) {
+								Double baseOffX = viewportScaleBaseKfPosX != null ? viewportScaleBaseKfPosX.get(e) : null;
+								Double baseOffY = viewportScaleBaseKfPosY != null ? viewportScaleBaseKfPosY.get(e) : null;
+								Double baseOffZ = viewportScaleBaseKfPosZ != null ? viewportScaleBaseKfPosZ.get(e) : null;
+								if (baseOffX == null) baseOffX = 0d;
+								if (baseOffY == null) baseOffY = 0d;
+								if (baseOffZ == null) baseOffZ = 0d;
+
+								// Total origin in animation draw() is element origin + keyframe origin offset
+								double originY = e.getOriginY() + kf.getOriginY();
+								double baseBottomY = e.getStartY() + baseOffY + originY * (1.0 - bsy);
+								double newBottomY = e.getStartY() + baseOffY + originY * (1.0 - nsy);
+								if (Double.isFinite(baseBottomY) && Double.isFinite(newBottomY) && newBottomY < baseBottomY) {
+									double neededLift = baseBottomY - newBottomY;
+									double newOffY = baseOffY + neededLift;
+
+									// Ensure PositionSet is enabled so the offset takes effect; seed from the evaluated frame so we don't snap.
+									AnimFrameElement prevKf = currentProject.SelectedAnimation.GetKeyFrameElement(e, curFrameIndex);
+									boolean prevPosSet = prevKf != null && prevKf.PositionSet;
+									AnimFrameElement kfPos = currentProject.SelectedAnimation.TogglePosition(e, true);
+									if (kfPos != null) {
+										// If we just enabled Position, seed from the current evaluated offsets (or our cached bases).
+										if (!prevPosSet) {
+											AnimFrameElement fe = curAnimFrame != null ? curAnimFrame.GetAnimFrameElementRec(e) : null;
+											if (fe != null) {
+												kfPos.setOffsetX(fe.getOffsetX());
+												kfPos.setOffsetY(fe.getOffsetY());
+												kfPos.setOffsetZ(fe.getOffsetZ());
+											} else {
+												kfPos.setOffsetX(baseOffX);
+												kfPos.setOffsetY(baseOffY);
+												kfPos.setOffsetZ(baseOffZ);
+											}
+										}
+
+										// Apply the Y compensation (keep X/Z at drag-start values).
+										kfPos.setOffsetX(baseOffX);
+										kfPos.setOffsetY(newOffY);
+										kfPos.setOffsetZ(baseOffZ);
+
+										// Keep our local ref consistent for mirror syncing.
+										kf = kfPos;
+										if (viewportScaleKeyframeElems != null) viewportScaleKeyframeElems.put(e, kfPos);
+									}
+								}
+							}
+							SyncMirrorKeyframe(kf, viewportScaleElems);
+						}
+
+						currentProject.SelectedAnimation.SetFramesDirty();
+					}
+					else
+					{
+						// Modeling tab: Scale gizmo drives Resize (width/height/depth), keeping element centered.
+						final double minSize = 0.01;
+						for (Element e : viewportScaleElems)
+						{
+							if (e == null) continue;
+							Double bx = viewportScaleBaseStartX != null ? viewportScaleBaseStartX.get(e) : null;
+							Double by = viewportScaleBaseStartY != null ? viewportScaleBaseStartY.get(e) : null;
+							Double bz = viewportScaleBaseStartZ != null ? viewportScaleBaseStartZ.get(e) : null;
+							Double bw = viewportScaleBaseW != null ? viewportScaleBaseW.get(e) : null;
+							Double bh = viewportScaleBaseH != null ? viewportScaleBaseH.get(e) : null;
+							Double bd = viewportScaleBaseD != null ? viewportScaleBaseD.get(e) : null;
+							if (bx == null) bx = e.getStartX();
+							if (by == null) by = e.getStartY();
+							if (bz == null) bz = e.getStartZ();
+							if (bw == null) bw = e.getWidth();
+							if (bh == null) bh = e.getHeight();
+							if (bd == null) bd = e.getDepth();
+
+							double newW = bw, newH = bh, newD = bd;
+							double shiftX = 0, shiftY = 0, shiftZ = 0;
+							switch (viewportScaleDragMode) {
+								case 1:
+									newW = Math.max(minSize, bw + 2 * delta);
+									shiftX = -(newW - bw) / 2.0;
+									break;
+								case 2:
+									newH = Math.max(minSize, bh + 2 * delta);
+									shiftY = -(newH - bh) / 2.0;
+									break;
+								case 3:
+									newD = Math.max(minSize, bd + 2 * delta);
+									shiftZ = -(newD - bd) / 2.0;
+									break;
+								case 4:
+									newW = Math.max(minSize, bw + 2 * delta);
+									newH = Math.max(minSize, bh + 2 * delta);
+									newD = Math.max(minSize, bd + 2 * delta);
+									shiftX = -(newW - bw) / 2.0;
+									shiftY = -(newH - bh) / 2.0;
+									shiftZ = -(newD - bd) / 2.0;
+									break;
+								default: break;
+							}
+
+							double newStartX = bx + shiftX;
+							double newStartY = by + shiftY;
+							double newStartZ = bz + shiftZ;
+							// Floor guard: never push the element below its drag-start floor level.
+							if (viewportFloorSnapEnabled && newStartY < by) {
+								newStartY = by;
+							}
+
+							e.setWidth(newW);
+							e.setHeight(newH);
+							e.setDepth(newD);
+							e.setStartX(newStartX);
+							e.setStartY(newStartY);
+							e.setStartZ(newStartZ);
+
+							// Mirror Mode: apply the same resize deltas to the L/R partner when it isn't selected.
+							if (ModelCreator.mirrorMode && viewportScaleMirrorPartners != null)
+							{
+								Element partner = viewportScaleMirrorPartners.get(e);
+								if (partner != null)
+								{
+									Double pbx = viewportScaleMirrorBaseStartX != null ? viewportScaleMirrorBaseStartX.get(partner) : null;
+									Double pby = viewportScaleMirrorBaseStartY != null ? viewportScaleMirrorBaseStartY.get(partner) : null;
+									Double pbz = viewportScaleMirrorBaseStartZ != null ? viewportScaleMirrorBaseStartZ.get(partner) : null;
+									Double pbw = viewportScaleMirrorBaseW != null ? viewportScaleMirrorBaseW.get(partner) : null;
+									Double pbh = viewportScaleMirrorBaseH != null ? viewportScaleMirrorBaseH.get(partner) : null;
+									Double pbd = viewportScaleMirrorBaseD != null ? viewportScaleMirrorBaseD.get(partner) : null;
+									if (pbx == null) pbx = partner.getStartX();
+									if (pby == null) pby = partner.getStartY();
+									if (pbz == null) pbz = partner.getStartZ();
+									if (pbw == null) pbw = partner.getWidth();
+									if (pbh == null) pbh = partner.getHeight();
+									if (pbd == null) pbd = partner.getDepth();
+
+									double changeW = (viewportScaleDragMode == 1 || viewportScaleDragMode == 4) ? (newW - bw) : 0;
+									double changeH = (viewportScaleDragMode == 2 || viewportScaleDragMode == 4) ? (newH - bh) : 0;
+									double changeD = (viewportScaleDragMode == 3 || viewportScaleDragMode == 4) ? (newD - bd) : 0;
+
+									double pNewW = Math.max(minSize, pbw + changeW);
+									double pNewH = Math.max(minSize, pbh + changeH);
+									double pNewD = Math.max(minSize, pbd + changeD);
+									double pShiftX = (viewportScaleDragMode == 1 || viewportScaleDragMode == 4) ? (-(pNewW - pbw) / 2.0) : 0;
+									double pShiftY = (viewportScaleDragMode == 2 || viewportScaleDragMode == 4) ? (-(pNewH - pbh) / 2.0) : 0;
+									double pShiftZ = (viewportScaleDragMode == 3 || viewportScaleDragMode == 4) ? (-(pNewD - pbd) / 2.0) : 0;
+
+									double pStartX = pbx + pShiftX;
+									double pStartY = pby + pShiftY;
+									double pStartZ = pbz + pShiftZ;
+									if (viewportFloorSnapEnabled && pStartY < pby) {
+										pStartY = pby;
+									}
+
+									partner.setWidth(pNewW);
+									partner.setHeight(pNewH);
+									partner.setDepth(pNewD);
+									partner.setStartX(pStartX);
+									partner.setStartY(pStartY);
+									partner.setStartZ(pStartZ);
+								}
+							}
+						}
+					}
+
+					SwingUtilities.invokeLater(new Runnable() {
+						@Override
+						public void run() { updateValues(null); }
+					});
+					lastMouseX = newMouseX;
+					lastMouseY = newMouseY;
+					return;
+				}
+
+				lastMouseX = newMouseX;
+				lastMouseY = newMouseY;
 			}
 
 			// Viewport move gizmo drag (axis handles + center free-move)
@@ -1428,6 +3464,18 @@ public static boolean renderAttachmentPoints;
 									}
 
 									if (haveDelta) {
+
+											// Desired WORLD delta along the active axis.
+											double dwx = 0, dwy = 0, dwz = 0;
+											switch (viewportGizmoDragMode) {
+												case 1: dwx = delta; break;
+												case 2: dwy = delta; break;
+												case 3: dwz = delta; break;
+												default: break;
+											}
+											// Apply optional snapping (grid / vertex) relative to drag-start pivot.
+											double[] snapped = applyViewportMoveSnapping(dwx, dwy, dwz, viewportGizmoDragMode == 1, viewportGizmoDragMode == 2, viewportGizmoDragMode == 3);
+											dwx = snapped[0]; dwy = snapped[1]; dwz = snapped[2];
 										for (Element e : viewportGizmoElems) {
 											if (e == null) continue;
 											Double bx = viewportGizmoBaseX.get(e);
@@ -1446,34 +3494,26 @@ public static boolean renderAttachmentPoints;
 																		// Fallback: no mapping available, behave like legacy.
 																		switch (viewportGizmoDragMode) {
 																			case 1:
-																					if (kf != null) { kf.setOffsetX(bx + delta); kf.setOffsetY(by); kf.setOffsetZ(bz); }
-																					else { e.setStartX(bx + delta); e.setStartY(by); e.setStartZ(bz); }
+																					if (kf != null) { kf.setOffsetX(bx + dwx); kf.setOffsetY(by); kf.setOffsetZ(bz); }
+																					else { e.setStartX(bx + dwx); e.setStartY(by); e.setStartZ(bz); }
 																					break;
 																			case 2:
 																			{
-																				double ny = by + delta;
+																				double ny = by + dwy;
 																				if (viewportFloorSnapEnabled && ny < by) ny = by;
 																				if (kf != null) { kf.setOffsetX(bx); kf.setOffsetY(ny); kf.setOffsetZ(bz); } else { e.setStartX(bx); e.setStartY(ny); e.setStartZ(bz); }
 																				break;
 																			}
 																			case 3:
-																					if (kf != null) { kf.setOffsetX(bx); kf.setOffsetY(by); kf.setOffsetZ(bz + delta); }
-																					else { e.setStartX(bx); e.setStartY(by); e.setStartZ(bz + delta); }
+																					if (kf != null) { kf.setOffsetX(bx); kf.setOffsetY(by); kf.setOffsetZ(bz + dwz); }
+																					else { e.setStartX(bx); e.setStartY(by); e.setStartZ(bz + dwz); }
 																					break;
 																			default: break;
 																		}
 																	} else {
-																		double ldx = 0, ldy = 0, ldz = 0;
-																		switch (viewportGizmoDragMode) {
-																			case 1: // WORLD X
-																				ldx = map[0] * delta; ldy = map[1] * delta; ldz = map[2] * delta; break;
-																			case 2: // WORLD Y
-																				ldx = map[3] * delta; ldy = map[4] * delta; ldz = map[5] * delta; break;
-																			case 3: // WORLD Z
-																				ldx = map[6] * delta; ldy = map[7] * delta; ldz = map[8] * delta; break;
-																			default: break;
-																		}
-
+																		double ldx = dwx * map[0] + dwy * map[3] + dwz * map[6];
+																		double ldy = dwx * map[1] + dwy * map[4] + dwz * map[7];
+																		double ldz = dwx * map[2] + dwy * map[5] + dwz * map[8];
 																		double nx = bx + ldx;
 																		double ny = by + ldy;
 																		double nz = bz + ldz;
@@ -1486,7 +3526,32 @@ public static boolean renderAttachmentPoints;
 
 																		if (kf != null) { kf.setOffsetX(nx); kf.setOffsetY(ny); kf.setOffsetZ(nz); }
 																					else { e.setStartX(nx); e.setStartY(ny); e.setStartZ(nz); }
-																	}
+																	
+													}
+													// Mirror Mode (modeling): apply mirrored movement to L/R partner
+											if (!viewportGizmoDragInKeyframeMode && ModelCreator.mirrorMode && viewportGizmoMirrorPartners != null && viewportGizmoMirrorBaseX != null) {
+												Element partner = viewportGizmoMirrorPartners.get(e);
+												if (partner != null) {
+													double ldx = e.getStartX() - bx;
+													double ldy = e.getStartY() - by;
+													double ldz = e.getStartZ() - bz;
+													at.vintagestory.modelcreator.enums.EnumAxis maxis = GetMirrorAxis(currentProject);
+													double pdx = ldx, pdy = ldy, pdz = ldz;
+													if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.X) pdx = -ldx;
+													if (maxis == at.vintagestory.modelcreator.enums.EnumAxis.Z) pdz = -ldz;
+													Double pbx = viewportGizmoMirrorBaseX.get(partner);
+													Double pby = viewportGizmoMirrorBaseY != null ? viewportGizmoMirrorBaseY.get(partner) : null;
+													Double pbz = viewportGizmoMirrorBaseZ != null ? viewportGizmoMirrorBaseZ.get(partner) : null;
+													if (pbx == null) pbx = partner.getStartX();
+													if (pby == null) pby = partner.getStartY();
+													if (pbz == null) pbz = partner.getStartZ();
+													partner.setStartX(pbx + pdx);
+													partner.setStartY(pby + pdy);
+													partner.setStartZ(pbz + pdz);
+												}
+											}
+
+if (viewportGizmoDragInKeyframeMode && kf != null) { SyncMirrorKeyframe(kf, viewportGizmoElems); }
 										}
 
 										updateValues(null);
@@ -1496,91 +3561,193 @@ public static boolean renderAttachmentPoints;
 									}
 								}
 
-								// Freedom mode: camera-relative movement (legacy behavior).
-								if (viewportFreedomModeEnabled) {
-									switch (viewportGizmoDragMode) {
-										case 1: // X (camera-right on ground)
-										{
-											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
-											moveX = s * viewportGizmoFreeRightX;
-											moveZ = s * viewportGizmoFreeRightZ;
-											break;
-										}
-										case 2: // Y (world up)
-										{
-											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
-											moveY = s;
-											break;
-										}
-										case 3: // Z (camera-forward on ground)
-										{
-											double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
-											// Camera-forward on XZ plane is perpendicular to camera-right.
-											double forwardX = -viewportGizmoFreeRightZ;
-											double forwardZ = viewportGizmoFreeRightX;
-											moveX = s * forwardX;
-											moveZ = s * forwardZ;
-											break;
-										}
-										case 4: // FREE (camera-right + world up)
-										{
-											double sx = dx / 20.0;
-											double sy = dy / 20.0;
-											moveX = sx * viewportGizmoFreeRightX + sy * viewportGizmoFreeUpX;
-											moveY = sx * viewportGizmoFreeRightY + sy * viewportGizmoFreeUpY;
-											moveZ = sx * viewportGizmoFreeRightZ + sy * viewportGizmoFreeUpZ;
-											break;
-										}
-										default: break;
-									}
-								}
-
-					for (Element e : viewportGizmoElems)
-					{
-						if (e == null) continue;
-
-						AnimFrameElement kf = (viewportGizmoDragInKeyframeMode && viewportGizmoKeyframeElems != null) ? viewportGizmoKeyframeElems.get(e) : null;
-						if (kf != null) {
-							if (moveX != 0) kf.setOffsetX(kf.getOffsetX() + moveX);
-							if (moveZ != 0) kf.setOffsetZ(kf.getOffsetZ() + moveZ);
-
-							double applyY = moveY;
-							if (applyY != 0)
+							// Freedom mode: camera-relative movement, but computed ABSOLUTELY from drag start so snapping can work.
+							if (viewportFreedomModeEnabled
+									&& viewportGizmoBaseX != null && viewportGizmoBaseY != null && viewportGizmoBaseZ != null)
 							{
-								if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
-									Double baseY = viewportGizmoBaseY.get(e);
-									if (baseY != null) {
-										double curY = kf.getOffsetY();
-										if (curY + applyY < baseY) {
-											applyY = baseY - curY;
-										}
-									}
-								}
-								kf.setOffsetY(kf.getOffsetY() + applyY);
-							}
-						} else {
-							if (moveX != 0) e.addStartX(moveX);
-							if (moveZ != 0) e.addStartZ(moveZ);
+								int ddx = newMouseX - mouseDownX;
+								int ddy = newMouseY - mouseDownY;
+								double dwx = 0, dwy = 0, dwz = 0;
+								boolean allowX = false, allowY = false, allowZ = false;
 
-							double applyY = moveY;
-							if (applyY != 0)
+								switch (viewportGizmoDragMode) {
+									case 1: // X (camera-right on ground)
+									{
+										double s = (ddx * viewportGizmoAxisDirX + ddy * viewportGizmoAxisDirY) / 20.0;
+										dwx = s * viewportGizmoFreeRightX;
+										dwz = s * viewportGizmoFreeRightZ;
+										allowX = true; allowZ = true;
+										break;
+									}
+									case 2: // Y (world up)
+									{
+										double s = (ddx * viewportGizmoAxisDirX + ddy * viewportGizmoAxisDirY) / 20.0;
+										dwy = s;
+										allowY = true;
+										break;
+									}
+									case 3: // Z (camera-forward on ground)
+									{
+										double s = (ddx * viewportGizmoAxisDirX + ddy * viewportGizmoAxisDirY) / 20.0;
+										// Camera-forward on XZ plane is perpendicular to camera-right.
+										double forwardX = -viewportGizmoFreeRightZ;
+										double forwardZ = viewportGizmoFreeRightX;
+										dwx = s * forwardX;
+										dwz = s * forwardZ;
+										allowX = true; allowZ = true;
+										break;
+									}
+									case 4: // FREE (camera-right + world up)
+									{
+										double sx = ddx / 20.0;
+										double sy = ddy / 20.0;
+										dwx = sx * viewportGizmoFreeRightX + sy * viewportGizmoFreeUpX;
+										dwy = sx * viewportGizmoFreeRightY + sy * viewportGizmoFreeUpY;
+										dwz = sx * viewportGizmoFreeRightZ + sy * viewportGizmoFreeUpZ;
+										allowX = true; allowY = true; allowZ = true;
+										break;
+									}
+									default: break;
+								}
+
+								// Apply snapping in WORLD space relative to the drag-start pivot.
+								double[] snapped = applyViewportMoveSnapping(dwx, dwy, dwz, allowX, allowY, allowZ);
+								dwx = snapped[0]; dwy = snapped[1]; dwz = snapped[2];
+								for (Element e : viewportGizmoElems)
+								{
+									if (e == null) continue;
+									Double bx = viewportGizmoBaseX.get(e);
+									Double by = viewportGizmoBaseY.get(e);
+									Double bz = viewportGizmoBaseZ.get(e);
+									if (bx == null || by == null || bz == null) continue;
+
+									AnimFrameElement kf = (viewportGizmoDragInKeyframeMode && viewportGizmoKeyframeElems != null) ? viewportGizmoKeyframeElems.get(e) : null;
+									double ldx = dwx, ldy = dwy, ldz = dwz;
+									double[] map = viewportGizmoWorldAxisToLocal != null ? viewportGizmoWorldAxisToLocal.get(e) : null;
+									if (map != null && map.length >= 9) {
+										ldx = dwx * map[0] + dwy * map[3] + dwz * map[6];
+										ldy = dwx * map[1] + dwy * map[4] + dwz * map[7];
+										ldz = dwx * map[2] + dwy * map[5] + dwz * map[8];
+									}
+
+									double nx = bx + ldx;
+									double ny = by + ldy;
+									double nz = bz + ldz;
+
+									// Optional floor snap (same semantics as before, but absolute).
+									if (viewportFloorSnapEnabled && allowY && dwy < 0 && ny < by) {
+										ny = by;
+									}
+
+									if (kf != null) { kf.setOffsetX(nx); kf.setOffsetY(ny); kf.setOffsetZ(nz); }
+									else { e.setStartX(nx); e.setStartY(ny); e.setStartZ(nz); }
+												if (viewportGizmoDragInKeyframeMode && kf != null) { SyncMirrorKeyframe(kf, viewportGizmoElems); }
+								}
+
+								// Ensure animation preview updates in real time while dragging in Keyframe mode.
+								if (viewportGizmoDragInKeyframeMode && currentProject != null && currentProject.SelectedAnimation != null) {
+									currentProject.SelectedAnimation.SetFramesDirty();
+								}
+
+								updateValues(null);
+								lastMouseX = newMouseX;
+								lastMouseY = newMouseY;
+								return;
+							}
+
+								// (If freedom mode is on but we can't compute bases, fall through to legacy.)
+								// Reuse the movement accumulators declared earlier in this method.
+								moveX = moveY = moveZ = 0;
+
+							// Legacy incremental movement (used as a safety fallback).
+							if (viewportFreedomModeEnabled) {
+								switch (viewportGizmoDragMode) {
+									case 1: // X (camera-right on ground)
+									{
+										double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+										moveX = s * viewportGizmoFreeRightX;
+										moveZ = s * viewportGizmoFreeRightZ;
+										break;
+									}
+									case 2: // Y (world up)
+									{
+										double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+										moveY = s;
+										break;
+									}
+									case 3: // Z (camera-forward on ground)
+									{
+										double s = (dx * viewportGizmoAxisDirX + dy * viewportGizmoAxisDirY) / 20.0;
+										// Camera-forward on XZ plane is perpendicular to camera-right.
+										double forwardX = -viewportGizmoFreeRightZ;
+										double forwardZ = viewportGizmoFreeRightX;
+										moveX = s * forwardX;
+										moveZ = s * forwardZ;
+										break;
+									}
+									case 4: // FREE (camera-right + world up)
+									{
+										double sx = dx / 20.0;
+										double sy = dy / 20.0;
+										moveX = sx * viewportGizmoFreeRightX + sy * viewportGizmoFreeUpX;
+										moveY = sx * viewportGizmoFreeRightY + sy * viewportGizmoFreeUpY;
+										moveZ = sx * viewportGizmoFreeRightZ + sy * viewportGizmoFreeUpZ;
+										break;
+									}
+									default: break;
+							}
+							}
+
+							for (Element e : viewportGizmoElems)
 							{
-								if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
-									Double baseY = viewportGizmoBaseY.get(e);
-									if (baseY != null) {
-										double curY = e.getStartY();
-										if (curY + applyY < baseY) {
-											applyY = baseY - curY;
+								if (e == null) continue;
+
+								AnimFrameElement kf = (viewportGizmoDragInKeyframeMode && viewportGizmoKeyframeElems != null) ? viewportGizmoKeyframeElems.get(e) : null;
+								if (kf != null) {
+									if (moveX != 0) kf.setOffsetX(kf.getOffsetX() + moveX);
+									if (moveZ != 0) kf.setOffsetZ(kf.getOffsetZ() + moveZ);
+
+									double applyY = moveY;
+									if (applyY != 0)
+									{
+										if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
+											Double baseY = viewportGizmoBaseY.get(e);
+											if (baseY != null) {
+												double curY = kf.getOffsetY();
+												if (curY + applyY < baseY) {
+													applyY = baseY - curY;
+												}
+											}
 										}
+										kf.setOffsetY(kf.getOffsetY() + applyY);
+																}
+																if (viewportGizmoDragInKeyframeMode) { SyncMirrorKeyframe(kf, viewportGizmoElems); }
+														} else {
+									if (moveX != 0) e.addStartX(moveX);
+									if (moveZ != 0) e.addStartZ(moveZ);
+
+									double applyY = moveY;
+									if (applyY != 0)
+									{
+										if (viewportFloorSnapEnabled && applyY < 0 && viewportGizmoBaseY != null) {
+											Double baseY = viewportGizmoBaseY.get(e);
+											if (baseY != null) {
+												double curY = e.getStartY();
+												if (curY + applyY < baseY) {
+													applyY = baseY - curY;
+												}
+											}
+										}
+										e.addStartY(applyY);
 									}
 								}
-								e.addStartY(applyY);
 							}
-						}
-					}
+							// Ensure animation preview updates in real time while dragging in Keyframe mode.
+							if (viewportGizmoDragInKeyframeMode && currentProject != null && currentProject.SelectedAnimation != null) {
+								currentProject.SelectedAnimation.SetFramesDirty();
+							}
 
-					
-updateValues(null);
+							updateValues(null);
 				}
 
 				lastMouseX = newMouseX;
@@ -1596,7 +3763,7 @@ updateValues(null);
 				if (openGlName >= 0)
 				{
 					Element hitElem = findElementByFaceOpenGlName(openGlName);
-					boolean hitIsPartOfMultiSelection = viewportGroupMoveEnabled
+					boolean hitIsPartOfMultiSelection = (viewportGroupMoveEnabled || isViewportSelectionOutOfSync(currentProject))
 							&& hitElem != null
 							&& currentProject.SelectedElements != null
 							&& currentProject.SelectedElements.size() > 1
@@ -1743,10 +3910,23 @@ updateValues(null);
 				modelrenderer.camera.rotateY((rxAbs >= 90 && rxAbs < 270 ? -1 : 1) * (float) (Mouse.getDX() * 0.5F) * modifier);
 			}
 
-			final float wheel = Mouse.getDWheel();
+			final int wheel = Mouse.getDWheel();
 			if (wheel != 0)
 			{
-				modelrenderer.camera.addZ(wheel * (cameraMod / 2500F));
+				boolean handledByUi = false;
+				try {
+					if (modelrenderer != null && modelrenderer.renderedLeftSidebar != null) {
+						int mx = Mouse.getX();
+						int my = canvHeight - Mouse.getY();
+						handledByUi = modelrenderer.renderedLeftSidebar.handleMouseWheel(wheel, mx, my, canvHeight);
+					}
+				} catch (Throwable t) {
+					handledByUi = false;
+				}
+
+				if (!handledByUi) {
+					modelrenderer.camera.addZ(wheel * (cameraMod / 2500F));
+				}
 			}
 			
 			if (Keyboard.isKeyDown(Keyboard.KEY_MINUS) || Keyboard.isKeyDown(Keyboard.KEY_SUBTRACT)) {
@@ -1817,6 +3997,74 @@ updateValues(null);
 
 		return -1;
 	}
+
+
+/**
+ * Like {@link #getElementGLNameAtPos(int, int)} but ignores any faces belonging to {@code ignoreElem}.
+	 * This is important during face snapping: the moving element often sits in front of the target,
+ * so the nearest pick hit would otherwise always be the moving element itself.
+ */
+private int getElementGLNameAtPosIgnoringElement(int x, int y, Element ignoreElem)
+{
+	IntBuffer selBuffer = ByteBuffer.allocateDirect(2048).order(ByteOrder.nativeOrder()).asIntBuffer();
+	int[] buffer = new int[512];
+
+	IntBuffer viewBuffer = ByteBuffer.allocateDirect(64).order(ByteOrder.nativeOrder()).asIntBuffer();
+	int[] viewport = new int[4];
+
+	GL11.glGetInteger(GL11.GL_VIEWPORT, viewBuffer);
+	viewBuffer.get(viewport);
+
+	GL11.glSelectBuffer(selBuffer);
+	GL11.glRenderMode(GL11.GL_SELECT);
+	GL11.glInitNames();
+	GL11.glPushName(0);
+	GL11.glPushMatrix();
+	{
+		GL11.glMatrixMode(GL11.GL_PROJECTION);
+		GL11.glLoadIdentity();
+		GLU.gluPickMatrix(x, y, 1, 1, IntBuffer.wrap(viewport));
+		int leftSidebarWidth = leftSidebarWidth();
+		if (canvWidth - leftSidebarWidth < 0)  {
+			if (modelrenderer.renderedLeftSidebar != null) {
+				modelrenderer.renderedLeftSidebar.nowSidebarWidth = canvWidth - 10;
+				leftSidebarWidth = leftSidebarWidth();
+			}
+		}
+		GLU.gluPerspective(60F, (float) (canvWidth - leftSidebarWidth) / (float) canvHeight, 0.3F, 1000F);
+
+		modelrenderer.prepareDraw();
+		modelrenderer.drawGridAndElements();
+	}
+	GL11.glPopMatrix();
+	int hits = GL11.glRenderMode(GL11.GL_RENDER);
+
+	selBuffer.get(buffer);
+	if (hits <= 0) return -1;
+
+	int bestName = -1;
+	int bestDepth = Integer.MAX_VALUE;
+
+	for (int i = 0; i < hits; i++)
+	{
+		int name = buffer[i * 4 + 3];
+		if (name == 0) continue;
+
+			// Resolve the owning element so we can ignore the moving element (and its children).
+		Element owner = findElementByFaceOpenGlName(name);
+		if (owner == null) continue;
+			if (ignoreElem != null && isInSubtree(ignoreElem, owner)) continue;
+
+		int depth = buffer[i * 4 + 1];
+		if (depth < bestDepth) {
+			bestDepth = depth;
+			bestName = name;
+		}
+	}
+
+	return bestName;
+}
+
 
 	/**
 	 * Finds the element that owns the given OpenGL face id.
@@ -2243,6 +4491,8 @@ updateValues(null);
 			currentProject.LoadIntoEditor(ModelCreator.rightTopPanel);
 			
 			setTitle(new File(currentProject.filePath).getName() + " - " + windowTitle);
+			// Track recent files (used by File -> Open Recent)
+			addRecentFile(filePath);
 		}
 		
 		
@@ -2269,6 +4519,104 @@ updateValues(null);
 				ap.StepChildElements.add(rootelem);
 			}
 		}
+	}
+
+	/**
+	 * Returns the list of recent files (most recent first).
+	 * Stored as a single pref key ("recentFiles") with newline-separated absolute paths.
+	 */
+	public static java.util.List<String> getRecentFiles()
+	{
+		String raw = prefs.get("recentFiles", "");
+		java.util.ArrayList<String> list = new java.util.ArrayList<String>();
+		if (raw == null || raw.length() == 0) return list;
+		String[] parts = raw.split("\\n");
+		for (String p : parts) {
+			if (p == null) continue;
+			String s = p.trim();
+			if (s.length() == 0) continue;
+			list.add(s);
+		}
+		return list;
+	}
+
+	/**
+	 * Returns the list of recently saved files (most recent first).
+	 * Stored as a single pref key ("recentlySavedFiles") with newline-separated absolute paths.
+	 */
+	public static java.util.List<String> getRecentlySavedFiles()
+	{
+		String raw = prefs.get("recentlySavedFiles", "");
+		java.util.ArrayList<String> list = new java.util.ArrayList<String>();
+		if (raw == null || raw.length() == 0) return list;
+		String[] parts = raw.split("\\n");
+		for (String p : parts) {
+			if (p == null) continue;
+			String s = p.trim();
+			if (s.length() == 0) continue;
+			list.add(s);
+		}
+		return list;
+	}
+
+	public static void addRecentlySavedFile(String filePath)
+	{
+		if (filePath == null) return;
+		String path;
+		try {
+			path = new File(filePath).getAbsolutePath();
+		} catch (Exception e) {
+			path = filePath;
+		}
+		// Only track JSON model files
+		String lower = path.toLowerCase();
+		if (!lower.endsWith(".json")) return;
+
+		boolean isWindows = java.io.File.separatorChar == '\\';
+		java.util.List<String> list = getRecentlySavedFiles();
+		// De-dup (case-insensitive on Windows)
+		for (int i = list.size() - 1; i >= 0; i--) {
+			String existing = list.get(i);
+			if (existing == null) continue;
+			boolean same = isWindows ? existing.equalsIgnoreCase(path) : existing.equals(path);
+			if (same) list.remove(i);
+		}
+		list.add(0, path);
+		while (list.size() > MAX_RECENT_FILES) list.remove(list.size() - 1);
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < list.size(); i++) {
+			if (i > 0) sb.append("\n");
+			sb.append(list.get(i));
+		}
+		prefs.put("recentlySavedFiles", sb.toString());
+	}
+
+	public static void addRecentFile(String filePath)
+	{
+		if (filePath == null) return;
+		String path;
+		try {
+			path = new File(filePath).getAbsolutePath();
+		} catch (Exception e) {
+			path = filePath;
+		}
+		boolean isWindows = java.io.File.separatorChar == '\\';
+		java.util.List<String> list = getRecentFiles();
+		// De-dup (case-insensitive on Windows)
+		for (int i = list.size() - 1; i >= 0; i--) {
+			String existing = list.get(i);
+			if (existing == null) continue;
+			boolean same = isWindows ? existing.equalsIgnoreCase(path) : existing.equals(path);
+			if (same) list.remove(i);
+		}
+		list.add(0, path);
+		while (list.size() > MAX_RECENT_FILES) list.remove(list.size() - 1);
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < list.size(); i++) {
+			if (i > 0) sb.append("\n");
+			sb.append(list.get(i));
+		}
+		prefs.put("recentFiles", sb.toString());
 	}
 	
 	
@@ -2423,6 +4771,8 @@ updateValues(null);
 	{
 		Exporter exporter = new Exporter(ModelCreator.currentProject);
 		exporter.export(file);
+		// Track recently saved files (used by File -> Open Recent -> Open Recently Saved)
+		addRecentlySavedFile(file.getAbsolutePath());
 		
 		ModelCreator.currentProject.filePath = file.getAbsolutePath(); 
 		currentProject.needsSaving = false;
@@ -2476,5 +4826,4 @@ updateValues(null);
 		
 	}
 
-	
 }

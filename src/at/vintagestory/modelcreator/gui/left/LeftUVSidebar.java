@@ -208,6 +208,53 @@ public class LeftUVSidebar extends LeftSidebar
 		}
 	}
 
+	/**
+	 * Select all UVs currently relevant to the UV editor.
+	 *
+	 * - In block texture mode: selects all enabled faces of the currently selected element.
+	 * - In entity texture mode: selects all enabled faces across all elements (all texture codes).
+	 */
+	public void selectAllUvs() {
+		if (ModelCreator.currentProject == null) return;
+
+		selectedUvs.clear();
+		clearBlockFaceSelection();
+
+		if (ModelCreator.currentProject.EntityTextureMode) {
+			for (Element root : ModelCreator.currentProject.rootElements) {
+				selectAllUvsRecurse(root);
+			}
+		} else {
+			Element elem = manager == null ? null : manager.getCurrentElement();
+			if (elem == null) return;
+			int firstEnabled = -1;
+			for (int i = 0; i < 6; i++) {
+				Face face = elem.getAllFaces()[i];
+				if (face == null || !face.isEnabled()) continue;
+				selectedBlockFaces[i] = true;
+				if (firstEnabled == -1) firstEnabled = i;
+			}
+			if (firstEnabled >= 0) elem.setSelectedFace(firstEnabled);
+		}
+
+		ModelCreator.updateValues(null);
+	}
+
+	private void selectAllUvsRecurse(Element elem) {
+		if (elem == null) return;
+		for (int i = 0; i < 6; i++) {
+			Face face = elem.getAllFaces()[i];
+			if (face == null || !face.isEnabled()) continue;
+			selectedUvs.add(new UvSelection(elem, i, face.getTextureCode()));
+		}
+		if (elem.ChildElements != null) {
+			for (Element child : elem.ChildElements) selectAllUvsRecurse(child);
+		}
+		if (elem.StepChildElements != null) {
+			for (Element child : elem.StepChildElements) selectAllUvsRecurse(child);
+		}
+	}
+
 	private boolean isEntityUvSelected(Element elem, int faceIndex, String textureCode) {
 		return selectedUvs.contains(new UvSelection(elem, faceIndex, textureCode));
 	}

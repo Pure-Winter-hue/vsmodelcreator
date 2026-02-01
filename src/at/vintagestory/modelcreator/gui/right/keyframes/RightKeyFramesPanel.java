@@ -61,7 +61,8 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 		int row = 0;
 
 		JPanel btnContainer = new JPanel(new GridLayout(1, 4, 4, 0));
-		btnContainer.setPreferredSize(new Dimension(196, 30));
+		int rightWidth = at.vintagestory.modelcreator.ModelCreator.prefs.getInt("rightBarWidth", 260);
+		btnContainer.setPreferredSize(new Dimension(Math.max(196, rightWidth - 24), 30));
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 11);
 		
@@ -74,24 +75,36 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 			
 			ModelCreator.changeHistory.beginMultichangeHistoryState();
 			
-			Element elem = ModelCreator.rightTopPanel.getCurrentElement();
-			Animation anim = ModelCreator.currentProject.SelectedAnimation;
-			int currentFrame = anim.currentFrame;
-			AnimationFrame aframe = anim.allFrames.get(currentFrame);
-			AnimFrameElement frameElem = aframe.GetAnimFrameElementRec(elem);
-
-			AnimFrameElement keyFrameElem = ModelCreator.currentProject.SelectedAnimation.ToggleRotation(elem, btnRot.isSelected());
+			java.util.List<Element> selected = ModelCreator.rightTopPanel.getSelectedElements();
+			if (selected == null || selected.size() == 0) {
+				Element lead = ModelCreator.rightTopPanel.getCurrentElement();
+				selected = lead == null ? java.util.Collections.emptyList() : java.util.Collections.singletonList(lead);
+			}
 			
-			if ((a.getModifiers() & ActionEvent.SHIFT_MASK) != 1) {
-				keyFrameElem.setRotationX(frameElem.getRotationX());
-				keyFrameElem.setRotationY(frameElem.getRotationY());
-				keyFrameElem.setRotationZ(frameElem.getRotationZ());
-			}			
+			Animation anim = ModelCreator.currentProject.SelectedAnimation;
+			if (anim != null && anim.allFrames.size() > 0) {
+				int currentFrame = anim.currentFrame;
+				AnimationFrame aframe = anim.allFrames.get(currentFrame);
+				boolean shift = (a.getModifiers() & ActionEvent.SHIFT_MASK) == 1;
+				for (Element elem : selected) {
+					if (elem == null) continue;
+					AnimFrameElement frameElem = aframe.GetAnimFrameElementRec(elem);
+					AnimFrameElement keyFrameElem = anim.ToggleRotation(elem, btnRot.isSelected());
+					
+					if (!shift && frameElem != null) {
+						keyFrameElem.setRotationX(frameElem.getRotationX());
+						keyFrameElem.setRotationY(frameElem.getRotationY());
+						keyFrameElem.setRotationZ(frameElem.getRotationZ());
+					}
+					
+					copyKeyFrameElemToBackdrop(elem);
+					AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(keyFrameElem, selected);
+					if (mirrorKf != null) { copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement); }
+				}
+			}
 			
 			ModelCreator.updateValues(btnRot);
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
-			
-			copyKeyFrameElemToBackdrop(elem);
 		});
 		btnContainer.add(btnRot);
 		
@@ -123,6 +136,9 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 			
 			copyKeyFrameElemToBackdrop(elem);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(keyFrameElem, null);
+			if (mirrorKf != null) { copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement); }
+
 		});
 		
 		btnContainer.add(btnPos);
@@ -157,6 +173,9 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 			
 			copyKeyFrameElemToBackdrop(elem);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(keyFrameElem, null);
+			if (mirrorKf != null) { copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement); }
+
 		});
 		btnContainer.add(btnScale);
 
@@ -186,6 +205,9 @@ public class RightKeyFramesPanel extends JPanel implements IValueUpdater
 			ModelCreator.changeHistory.endMultichangeHistoryState(ModelCreator.currentProject);
 
 			copyKeyFrameElemToBackdrop(elem);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(keyFrameElem, null);
+			if (mirrorKf != null) { copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement); }
+
 		});
 		btnContainer.add(btnOrigin);
 		

@@ -63,7 +63,8 @@ public class ElementUVPanel extends JPanel implements IValueUpdater
 	{
 		this.manager = manager;
 		setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-		setMaximumSize(new Dimension(186, 224));
+		// Let the panel expand with the right bar width
+		setMaximumSize(new Dimension(Integer.MAX_VALUE, 224));
 		initComponents();
 		initProperties();
 		addComponents();
@@ -130,7 +131,8 @@ public class ElementUVPanel extends JPanel implements IValueUpdater
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 20);
 		for (JButton btn : buttons) {
-			btn.setSize(new Dimension(62, 30));
+			btn.setPreferredSize(new Dimension(90, 34));
+			btn.setMinimumSize(new Dimension(90, 34));
 			btn.setFont(defaultFont);
 		}
 	}
@@ -138,7 +140,8 @@ public class ElementUVPanel extends JPanel implements IValueUpdater
 	public void initProperties()
 	{
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 20);
-		xStartField.setSize(new Dimension(62, 30));
+		xStartField.setPreferredSize(new Dimension(90, 34));
+		xStartField.setMinimumSize(new Dimension(90, 34));
 		xStartField.setFont(defaultFont);
 		xStartField.setHorizontalAlignment(JTextField.CENTER);
 		
@@ -168,7 +171,8 @@ public class ElementUVPanel extends JPanel implements IValueUpdater
 		});
 
 		
-		yStartField.setSize(new Dimension(62, 30));
+		yStartField.setPreferredSize(new Dimension(90, 34));
+		yStartField.setMinimumSize(new Dimension(90, 34));
 		yStartField.setFont(defaultFont);
 		yStartField.setHorizontalAlignment(JTextField.CENTER);
 		
@@ -305,9 +309,9 @@ public class ElementUVPanel extends JPanel implements IValueUpdater
 		titlePanel.setVisible(autoUnwrapEnabled);
 		
 		if (autoUnwrapEnabled) {
-			setMaximumSize(new Dimension(186, 224));
+			setMaximumSize(new Dimension(Integer.MAX_VALUE, 224));
 		} else {
-			setMaximumSize(new Dimension(186, 25));
+			setMaximumSize(new Dimension(Integer.MAX_VALUE, 25));
 		}
 		
 		alternateUnwrap.setVisible(ModelCreator.currentRightTab == 1);

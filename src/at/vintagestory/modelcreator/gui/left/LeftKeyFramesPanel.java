@@ -84,6 +84,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 	
 	JCheckBox treadMill;
 	JTextField treadMillSpeed;
+	JCheckBox mirrorMode;
 	
 	boolean ignoreSelectionChange = false;
 	
@@ -120,6 +121,7 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		
 		treadMill = new JCheckBox();
 		treadMillSpeed = new JTextField("1");
+		mirrorMode = new JCheckBox();
 		
 		
 		tableModel = new AbstractTableModel()
@@ -550,8 +552,20 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		treadmillPanel.add(panel2);
 		
 		add(treadmillPanel);
-		
-		
+
+
+// 8. Mirror Mode (L/R)
+mirrorMode.addChangeListener(e -> {
+    ModelCreator.mirrorMode = mirrorMode.isSelected();
+});
+mirrorMode.setToolTipText("<html>When enabled: elements named identically except for L/R are treated as partners.<br>Keyframe edits on one side are mirrored onto the other.</html>");
+
+JPanel mirrorPanel = new JPanel(new GridLayout(2, 1));
+mirrorPanel.add(new JLabel("Mirror Mode"));
+mirrorPanel.add(mirrorMode);
+add(mirrorPanel);
+
+
 		updateValues(null);
 	}
 
@@ -766,6 +780,9 @@ public class LeftKeyFramesPanel extends JPanel implements IValueUpdater
 		duplicateFrameButton.setEnabled(enabled);
 		
 		currentFrameLabel.setText(enabled ? ("" + project.SelectedAnimation.currentFrame) : "");
+		
+		treadMill.setSelected(ModelCreator.showTreadmill);
+		mirrorMode.setSelected(ModelCreator.mirrorMode);
 		
 		keyFramesTable.updateUI();
 		

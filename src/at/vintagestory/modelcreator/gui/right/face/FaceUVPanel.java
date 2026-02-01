@@ -55,7 +55,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 		this.manager = manager;
 		setLayout(new GridLayout(3, 4, 4, 4));
 		setBorder(BorderFactory.createTitledBorder(Start.Border, "<html><b>Face UV</b></html>"));
-		setMaximumSize(new Dimension(186, 124));
+		// Allow expanding so decimal UV values don't get clipped
+		setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
 		initComponents();
 		initProperties();
 		addComponents();
@@ -82,7 +83,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 20);
 		for (JButton btn : buttons) {
-			btn.setSize(new Dimension(62, 30));
+			btn.setPreferredSize(new Dimension(90, 34));
+			btn.setMinimumSize(new Dimension(90, 34));
 			btn.setFont(defaultFont);
 		}
 	}
@@ -90,7 +92,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 	public void initProperties()
 	{
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 20);
-		uStartField.setSize(new Dimension(62, 30));
+		uStartField.setPreferredSize(new Dimension(90, 34));
+		uStartField.setMinimumSize(new Dimension(90, 34));
 		uStartField.setFont(defaultFont);
 		uStartField.setHorizontalAlignment(JTextField.CENTER);
 		
@@ -105,7 +108,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 		});
 		
 
-		vStartField.setSize(new Dimension(62, 30));
+		vStartField.setPreferredSize(new Dimension(90, 34));
+		vStartField.setMinimumSize(new Dimension(90, 34));
 		vStartField.setFont(defaultFont);
 		vStartField.setHorizontalAlignment(JTextField.CENTER);
 		
@@ -121,7 +125,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 		});
 
 
-		uEndField.setSize(new Dimension(62, 30));
+		uEndField.setPreferredSize(new Dimension(90, 34));
+		uEndField.setMinimumSize(new Dimension(90, 34));
 		uEndField.setFont(defaultFont);
 		uEndField.setHorizontalAlignment(JTextField.CENTER);
 		
@@ -142,7 +147,8 @@ public class FaceUVPanel extends JPanel implements IValueUpdater
 			ModelCreator.updateValues(uEndField);			
 		});
 
-		vEndField.setSize(new Dimension(62, 30));
+		vEndField.setPreferredSize(new Dimension(90, 34));
+		vEndField.setMinimumSize(new Dimension(90, 34));
 		vEndField.setFont(defaultFont);
 		vEndField.setHorizontalAlignment(JTextField.CENTER);
 				

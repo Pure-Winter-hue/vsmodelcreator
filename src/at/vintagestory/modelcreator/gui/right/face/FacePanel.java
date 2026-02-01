@@ -92,7 +92,8 @@ public class FacePanel extends JPanel implements IValueUpdater
 				updateValues(menuList);
 			}
 		});
-		menuPanel.setMaximumSize(new Dimension(186, 50));
+		// Let the panel expand with the right bar width (avoids clipped numbers/text)
+		menuPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
 		menuPanel.add(menuList);
 
 		panelTexture = new FaceTexturePanel(manager);
@@ -126,13 +127,13 @@ public class FacePanel extends JPanel implements IValueUpdater
 		});
 		
 		rotation.setToolTipText("<html>The rotation of the texture<br>Default: 0\u00b0</html>");
-		sliderPanel.setMaximumSize(new Dimension(190, 80));
+		sliderPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
 		sliderPanel.add(rotation);
 	}
 
 	public void addComponents()
 	{
-		add(Box.createRigidArea(new Dimension(192, 5)));
+		add(Box.createRigidArea(new Dimension(0, 5)));
 		add(panelElemUV);
 		add(menuPanel);
 		add(panelTexture);

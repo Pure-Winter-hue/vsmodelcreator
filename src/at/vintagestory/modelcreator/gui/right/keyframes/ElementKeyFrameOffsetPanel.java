@@ -96,6 +96,9 @@ public class ElementKeyFrameOffsetPanel extends JPanel implements IValueUpdater
 			}
 			
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 		
 		xPositionField.addFocusListener(new FocusListenerImpl()
@@ -144,6 +147,9 @@ public class ElementKeyFrameOffsetPanel extends JPanel implements IValueUpdater
 			}
 			
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 
 		yPositionField.addFocusListener(new FocusListenerImpl()
@@ -192,6 +198,9 @@ public class ElementKeyFrameOffsetPanel extends JPanel implements IValueUpdater
 			}
 			
 			keyFramesPanel.copyKeyFrameElemToBackdrop(element.AnimatedElement);
+			AnimFrameElement mirrorKf = ModelCreator.SyncMirrorKeyframe(element, null);
+			if (mirrorKf != null) keyFramesPanel.copyKeyFrameElemToBackdrop(mirrorKf.AnimatedElement);
+
 		});
 		
 		zPositionField.addFocusListener(new FocusListenerImpl()

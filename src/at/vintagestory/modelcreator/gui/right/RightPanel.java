@@ -26,6 +26,8 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 
 	private ModelCreator creator;
 	
+	private static final int DEFAULT_RIGHTBAR_WIDTH = 280;
+	
 	// Swing Variables
 	private SpringLayout layout;
 	public JScrollPane scrollPane;
@@ -45,7 +47,7 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 	public RightPanel(ModelCreator creator)
 	{
 		this.creator = creator;
-		int width = ModelCreator.prefs.getInt("rightBarWidth", 215);
+		int width = ModelCreator.prefs.getInt("rightBarWidth", DEFAULT_RIGHTBAR_WIDTH);
 		setPreferredSize(new Dimension(width, 1450));
 		initComponents();
 	}
@@ -64,7 +66,7 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 		
 		add(tree.jtree);
 		scrollPane = new JScrollPane(tree.jtree);
-		int width = ModelCreator.prefs.getInt("rightBarWidth", 215);
+		int width = ModelCreator.prefs.getInt("rightBarWidth", DEFAULT_RIGHTBAR_WIDTH);
 		scrollPane.setPreferredSize(new Dimension(width-10, ModelCreator.elementTreeHeight + dy));
 		add(scrollPane);
 		initElementTreeResize();
@@ -72,7 +74,7 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 		
 		Font defaultFont = new Font("SansSerif", Font.BOLD, 14);
 		btnContainer = new JPanel(new GridLayout(1, 3, 4, 0));
-		btnContainer.setPreferredSize(new Dimension(205, 30));
+		btnContainer.setPreferredSize(new Dimension(width - 10, 30));
 
 		btnAdd.setIcon(Icons.cube);
 		btnAdd.setToolTipText("New Element");
@@ -83,7 +85,8 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 				elem.setTextureCode(ModelCreator.currentProject.TexturesByCode.values().iterator().next().code, false);
 			}
 			
-			ModelCreator.currentProject.addElementAsChild(elem); 
+			// Spawn root cubes centered on the floor grid when nothing is selected (or when the project is empty).
+			ModelCreator.currentProject.addCubeSmartCentered(elem);
 		});
 		btnAdd.setPreferredSize(new Dimension(30, 30));
 		btnContainer.add(btnAdd);
@@ -102,7 +105,7 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 		btnContainer.add(btnDuplicate);
 		add(btnContainer);
 
-		nameField.setPreferredSize(new Dimension(205, 25));
+		nameField.setPreferredSize(new Dimension(width - 10, 25));
 		nameField.setToolTipText("Element Name");
 		nameField.setEnabled(false);
 
@@ -129,13 +132,18 @@ public class RightPanel extends JPanel implements IElementManager, IValueUpdater
 
 
 
-		tabbedPane.add("Cube", new ElementPanel(this));
-		tabbedPane.add("Face", new FacePanel(this));
-		tabbedPane.add("Keyframe", rightKeyFramesPanel = new RightKeyFramesPanel());
-		tabbedPane.add("P", new AttachmentPointsPanel());
+		tabbedPane.add("Modeling", new ElementPanel(this));
+		tabbedPane.add("UVs", new FacePanel(this));
+		tabbedPane.add("Animation", rightKeyFramesPanel = new RightKeyFramesPanel());
+		tabbedPane.add("Attachment Points", new AttachmentPointsPanel());
 		
-		tabbedPane.setPreferredSize(new Dimension(205, 1150));
+		tabbedPane.setPreferredSize(new Dimension(width - 10, 1150));
 		tabbedPane.setTabPlacement(JTabbedPane.TOP);
+		// Keep the "stacked" multi-row tab look, but don't let Swing rotate the tab rows
+		// (BasicTabbedPaneUI's default WRAP behavior moves the selected tab's row to the top).
+		tabbedPane.setTabLayoutPolicy(JTabbedPane.WRAP_TAB_LAYOUT);
+		// Also force a stable 2x2 layout: Modeling/UVs on the top row, Animation/Attachment Points below.
+		tabbedPane.setUI(new at.vintagestory.modelcreator.gui.FixedTwoRowTabbedPaneUI());
 		
 		tabbedPane.addChangeListener(c ->
 		{
@@ -350,7 +358,7 @@ public ModelCreator getCreator()
 		ModelCreator.prefs.putInt("elementTreeHeight", newHeight);
 
 		SwingUtilities.invokeLater(() -> {
-			int width = ModelCreator.prefs.getInt("rightBarWidth", 215);
+			int width = ModelCreator.prefs.getInt("rightBarWidth", DEFAULT_RIGHTBAR_WIDTH);
 			scrollPane.setPreferredSize(new Dimension(width - 10, ModelCreator.elementTreeHeight + dy));
 			setLayout(dy);
 			revalidate();
@@ -392,7 +400,7 @@ public ModelCreator getCreator()
 		}
 		
 		if (nowResizingSidebar) {
-			final int newwidth = Math.min(600, Math.max(215, width + (lastGrabMouseX - nowMouseX)));
+			final int newwidth = Math.min(600, Math.max(260, width + (lastGrabMouseX - nowMouseX)));
 			setSidebarWidth(newwidth);
 			
 			lastGrabMouseX = nowMouseX;
@@ -410,6 +418,9 @@ public ModelCreator getCreator()
 				setPreferredSize(new Dimension(newwidth, prevheight));
 				int my = ModelCreator.elementTreeHeight;
 				scrollPane.setPreferredSize(new Dimension(newwidth - 10, my + dy));
+				btnContainer.setPreferredSize(new Dimension(newwidth - 10, 30));
+				nameField.setPreferredSize(new Dimension(newwidth - 10, 25));
+				tabbedPane.setPreferredSize(new Dimension(newwidth - 10, 1150));
 				
 				invalidate();
 				ModelCreator.Instance.revalidate();

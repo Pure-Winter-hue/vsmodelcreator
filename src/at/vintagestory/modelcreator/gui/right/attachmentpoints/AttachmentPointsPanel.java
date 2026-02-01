@@ -46,7 +46,8 @@ public class AttachmentPointsPanel extends JPanel implements IValueUpdater
 	{
 		setLayout(layout = new SpringLayout());
 		setBorder(BorderFactory.createTitledBorder(Start.Border, "<html><b>Attachment Points</b></html>"));
-		setMaximumSize(new Dimension(186, 124));
+		// Don't constrain this panel's width. A fixed maximum size causes the whole tab contents
+		// to stay narrow and left-aligned even when the right bar is wider.
 		initComponents();
 		addComponents();
 		setLayoutConstaints();
@@ -154,11 +155,24 @@ public class AttachmentPointsPanel extends JPanel implements IValueUpdater
 
 	public void setLayoutConstaints()
 	{
+		// Vertical placement
 		layout.putConstraint(SpringLayout.NORTH, pointList, 0, SpringLayout.NORTH, this);
 		layout.putConstraint(SpringLayout.NORTH, btnContainer, 105, SpringLayout.NORTH, this);
 		layout.putConstraint(SpringLayout.NORTH, codeField, 140, SpringLayout.NORTH, this);
 		layout.putConstraint(SpringLayout.NORTH, posPanel, 190, SpringLayout.NORTH, this);
 		layout.putConstraint(SpringLayout.NORTH, rotPanel, 310, SpringLayout.NORTH, this);
+
+		// Horizontal stretch: keep everything centered/wide like the other right-hand panels
+		layout.putConstraint(SpringLayout.WEST, pointList, 0, SpringLayout.WEST, this);
+		layout.putConstraint(SpringLayout.EAST, pointList, 0, SpringLayout.EAST, this);
+		layout.putConstraint(SpringLayout.WEST, btnContainer, 0, SpringLayout.WEST, this);
+		layout.putConstraint(SpringLayout.EAST, btnContainer, 0, SpringLayout.EAST, this);
+		layout.putConstraint(SpringLayout.WEST, codeField, 0, SpringLayout.WEST, this);
+		layout.putConstraint(SpringLayout.EAST, codeField, 0, SpringLayout.EAST, this);
+		layout.putConstraint(SpringLayout.WEST, posPanel, 0, SpringLayout.WEST, this);
+		layout.putConstraint(SpringLayout.EAST, posPanel, 0, SpringLayout.EAST, this);
+		layout.putConstraint(SpringLayout.WEST, rotPanel, 0, SpringLayout.WEST, this);
+		layout.putConstraint(SpringLayout.EAST, rotPanel, 0, SpringLayout.EAST, this);
 	}
 	
 	public void addComponents()

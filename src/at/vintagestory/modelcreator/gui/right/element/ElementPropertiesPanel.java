@@ -118,10 +118,14 @@ public class ElementPropertiesPanel extends JPanel implements IValueUpdater
 			if (elem != null) {
 				int prevPass = elem.getRenderPass();
 				int newpass = renderPassList.getSelectedIndex() - 1;
+				boolean changed = (prevPass != newpass);
 				elem.setRenderPass(newpass);
 				
-				if (prevPass != newpass) ModelCreator.DidModify();
+				if (ModelCreator.childrenInheritRenderPass) {
+					changed |= applyRenderPassToDescendants(elem, newpass);
+				}
 				
+				if (changed) ModelCreator.DidModify();
 				ModelCreator.updateValues(renderPassList);
 			}
 		});
@@ -190,6 +194,44 @@ public class ElementPropertiesPanel extends JPanel implements IValueUpdater
 		}
 	}
 	
+
+	private boolean applyRenderPassToDescendants(Element parent, int renderPass)
+	{
+		boolean changed = false;
+		if (parent.ChildElements != null) {
+			for (Element child : parent.ChildElements) {
+				changed |= applyRenderPassRecursive(child, renderPass);
+			}
+		}
+		if (parent.StepChildElements != null) {
+			for (Element child : parent.StepChildElements) {
+				changed |= applyRenderPassRecursive(child, renderPass);
+			}
+		}
+		return changed;
+	}
+	
+	private boolean applyRenderPassRecursive(Element elem, int renderPass)
+	{
+		if (elem == null) return false;
+		boolean changed = false;
+		if (elem.getRenderPass() != renderPass) {
+			elem.setRenderPass(renderPass);
+			changed = true;
+		}
+		if (elem.ChildElements != null) {
+			for (Element child : elem.ChildElements) {
+				changed |= applyRenderPassRecursive(child, renderPass);
+			}
+		}
+		if (elem.StepChildElements != null) {
+			for (Element child : elem.StepChildElements) {
+				changed |= applyRenderPassRecursive(child, renderPass);
+			}
+		}
+		return changed;
+	}
+
 	
 	private DefaultComboBoxModel<String> renderPassList()
 	{
